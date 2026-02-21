@@ -8,4 +8,9 @@ module.exports = {
   },
   testMatch: ['**/*.test.ts'],
   collectCoverageFrom: ['src/**/*.ts'],
+  transform: {
+    '^.+\\.ts$': ['ts-jest', {
+      diagnostics: false,
+    }],
+  },
 };
