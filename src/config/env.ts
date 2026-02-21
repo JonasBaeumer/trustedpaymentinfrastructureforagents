@@ -1,0 +1,18 @@
+import dotenv from 'dotenv';
+dotenv.config();
+
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`Missing required env var: ${name}`);
+  return value;
+}
+
+export const env = {
+  DATABASE_URL: requireEnv('DATABASE_URL'),
+  REDIS_URL: requireEnv('REDIS_URL'),
+  STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY || 'sk_test_placeholder',
+  STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET || 'whsec_placeholder',
+  WORKER_API_KEY: requireEnv('WORKER_API_KEY'),
+  PORT: parseInt(process.env.PORT || '3000', 10),
+  NODE_ENV: process.env.NODE_ENV || 'development',
+};

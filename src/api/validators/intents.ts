@@ -1,0 +1,11 @@
+import { z } from 'zod';
+
+export const createIntentSchema = z.object({
+  userId: z.string().min(1),
+  query: z.string().min(1).max(500),
+  maxBudget: z.number().int().positive().max(1000000), // max £10,000 in pence
+  currency: z.string().length(3).default('gbp'),
+  expiresAt: z.string().datetime().optional(),
+});
+
+export type CreateIntentInput = z.infer<typeof createIntentSchema>;
