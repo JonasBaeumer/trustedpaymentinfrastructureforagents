@@ -45,6 +45,7 @@ model User {
   maxBudgetPerIntent  Int             @default(50000)
   merchantAllowlist   String[]        @default([])
   mccAllowlist        String[]        @default([])
+  stripeCardholderId  String?
   createdAt           DateTime        @default(now())
 
   intents             PurchaseIntent[]

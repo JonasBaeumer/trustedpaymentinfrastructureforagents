@@ -22,38 +22,52 @@ export async function issueVirtualCard(
   });
   if (!intent) throw new IntentNotFoundError(intentId);
 
-  // Create a cardholder for this intent (no upsert — User model lacks stripeCardholderId)
-  let cardholder: Stripe.Issuing.Cardholder;
-  try {
-    cardholder = await stripe.issuing.cardholders.create({
-      name: 'Agent Buyer',
-      email: intent.user.email,
-      type: 'individual',
-      billing: {
-        address: {
-          line1: '1 Agent St',
-          city: 'London',
-          postal_code: 'EC1A 1BB',
-          country: 'GB',
+  // Upsert cardholder: reuse existing Stripe cardholder if the user already has one,
+  // otherwise create a new one and persist the ID so future intents reuse it.
+  let cardholderId: string;
+  if (intent.user.stripeCardholderId) {
+    cardholderId = intent.user.stripeCardholderId;
+  } else {
+    let newCardholder: Stripe.Issuing.Cardholder;
+    try {
+      newCardholder = await stripe.issuing.cardholders.create({
+        name: 'Agent Buyer',
+        email: intent.user.email,
+        type: 'individual',
+        billing: {
+          address: {
+            line1: '1 Agent St',
+            city: 'London',
+            postal_code: 'EC1A 1BB',
+            country: 'GB',
+          },
         },
-      },
-    });
-  } catch (err) {
-    if (err instanceof Stripe.errors.StripeError) {
-      console.error(JSON.stringify({ level: 'error', message: 'Cardholder create failed', type: err.type, code: err.code, intentId }));
+      });
+    } catch (err) {
+      if (err instanceof Stripe.errors.StripeError) {
+        console.error(JSON.stringify({ level: 'error', message: 'Cardholder create failed', type: err.type, code: err.code, intentId }));
+      }
+      throw err;
     }
-    throw err;
+    cardholderId = newCardholder.id;
+    // Persist so all future intents for this user reuse the same cardholder
+    await prisma.user.update({
+      where: { id: intent.user.id },
+      data: { stripeCardholderId: cardholderId },
+    });
   }
 
-  // Create virtual card with intentId as idempotency key
+  // Create virtual card with intentId as idempotency key.
+  // metadata.intentId is set so Stripe webhook events can be correlated back to this intent.
   let stripeCard: Stripe.Issuing.Card;
   try {
     stripeCard = await stripe.issuing.cards.create(
       {
-        cardholder: cardholder.id,
+        cardholder: cardholderId,
         currency: currency.toLowerCase(),
         type: 'virtual',
         spending_controls: buildSpendingControls(amount, options.mccAllowlist),
+        metadata: { intentId },
       },
       { idempotencyKey: intentId },
     );
