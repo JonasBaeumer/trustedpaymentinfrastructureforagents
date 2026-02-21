@@ -1,22 +1,22 @@
 # Trusted Payment Infrastructure for Agents
 
-A backend system enabling AI agents to complete shopping tasks on behalf of users -- without ever accessing real bank credentials. The user approves a one-time budget; the backend issues a restricted Stripe virtual card; the agent uses it for a single checkout; the card is cancelled and the ledger settled.
+A backend system enabling AI agents to complete shopping tasks on behalf of users — without ever accessing real bank credentials. The user approves a one-time budget; the backend issues a restricted Stripe virtual card; the agent uses it for a single checkout; the card is cancelled and the ledger settled.
 
 ## Architecture
 
 ```
-Telegram (later) ───┐
-OpenClaw worker ────┤──▶ API Gateway (Fastify)
-Stripe webhooks ────┘          │
-                               ├──▶ Orchestrator (state machine)
-                               │         │
-                               │         ├──▶ Payments Service (Stripe Issuing)
-                               │         ├──▶ Policy & Approval Service
-                               │         ├──▶ Ledger Service (Monzo pot simulation)
-                               │         └──▶ Job Queue (BullMQ)
-                               │                   │
-                               │                   └──▶ Stub Worker (simulates OpenClaw)
-                               └──▶ PostgreSQL (Prisma)
+Telegram (later) ──┐
+OpenClaw worker ───┤──▶ API Gateway (Fastify :3000)
+Stripe webhooks ───┘          │
+                              ├──▶ Orchestrator (state machine)
+                              │         │
+                              │         ├──▶ Payments Service (Stripe Issuing)
+                              │         ├──▶ Policy & Approval Service
+                              │         ├──▶ Ledger Service (Monzo pot simulation)
+                              │         └──▶ Job Queue (BullMQ)
+                              │                   │
+                              │                   └──▶ Stub Worker (simulates OpenClaw)
+                              └──▶ PostgreSQL (Prisma)
 ```
 
 ### Intent State Machine
@@ -24,7 +24,7 @@ Stripe webhooks ────┘          │
 ```
 RECEIVED → SEARCHING → QUOTED → AWAITING_APPROVAL → APPROVED → CARD_ISSUED → CHECKOUT_RUNNING → DONE
                                                    ↘ DENIED                                    ↘ FAILED
-                                    (any active state) → EXPIRED
+                                (any active state) → EXPIRED
 ```
 
 ## Quick Start
@@ -32,94 +32,89 @@ RECEIVED → SEARCHING → QUOTED → AWAITING_APPROVAL → APPROVED → CARD_IS
 ### Prerequisites
 - Node.js 18+
 - Docker (for Postgres + Redis)
+- Stripe account (test mode keys)
 
-### 1. Clone and install
+### 1. Install and configure
 ```bash
-git clone <repo>
-cd trustedpaymentinfrastructureforagents
 npm install
 cp .env.example .env
-# Edit .env -- add your STRIPE_SECRET_KEY
+# Edit .env — fill in STRIPE_SECRET_KEY from Stripe Dashboard (test mode)
 ```
 
 ### 2. Start infrastructure
 ```bash
-docker compose up -d   # starts Postgres + Redis
+docker compose up -d    # starts Postgres 16 + Redis 7
 ```
 
-### 3. Run migrations + seed
+### 3. Migrate and seed
 ```bash
-npm run db:migrate     # creates tables
-npm run seed           # creates demo user (demo@agentpay.dev, 1000 GBP balance)
+npm run db:migrate      # creates all tables
+npm run seed            # creates demo user (demo@agentpay.dev, £1000 balance)
 ```
 
-### 4. Start the API server
+### 4. Start the server
 ```bash
-npm run dev            # http://localhost:3000
+npm run dev             # http://localhost:3000
 ```
 
 ### 5. (Optional) Start the stub worker
 ```bash
-npm run worker         # consumes BullMQ jobs, simulates OpenClaw
+npm run worker          # processes BullMQ jobs, simulates OpenClaw
 ```
 
-### 6. (Optional) Forward Stripe webhooks
+### 6. (Optional) Forward Stripe webhooks for local dev
 ```bash
 stripe listen --forward-to localhost:3000/v1/webhooks/stripe
+# Copy the whsec_... secret into .env as STRIPE_WEBHOOK_SECRET
 ```
 
-## End-to-End Flow (curl examples)
+## End-to-End Flow
 
-### Step 1 -- Get the demo user ID
-```bash
-# After seeding, find the user ID:
-curl http://localhost:3000/v1/debug/intents   # or check DB directly
-# For the examples below, replace USER_ID with your seeded user's ID
-```
+Replace `USER_ID` with the ID from your seeded user (check DB or `GET /v1/debug/intents` after first intent).
 
-### Step 2 -- Create a purchase intent
+### 1 — Create intent
 ```bash
 curl -X POST http://localhost:3000/v1/intents \
   -H "Content-Type: application/json" \
   -H "X-Idempotency-Key: $(uuidgen)" \
-  -d '{"userId": "USER_ID", "query": "Sony WH-1000XM5 headphones", "maxBudget": 30000, "currency": "gbp"}'
-# Response: {"intentId": "clxxx...", "status": "RECEIVED"}
+  -d '{"userId":"USER_ID","query":"Sony WH-1000XM5 headphones","maxBudget":30000,"currency":"gbp"}'
+# → {"intentId":"clxxx...","status":"RECEIVED"}
 ```
 
-### Step 3 -- Post a quote (simulates worker search result)
+### 2 — Post a quote (simulates worker search)
 ```bash
 curl -X POST http://localhost:3000/v1/agent/quote \
   -H "Content-Type: application/json" \
   -H "X-Worker-Key: local-dev-worker-key" \
-  -d '{"intentId": "INTENT_ID", "merchantName": "Amazon UK", "merchantUrl": "https://amazon.co.uk/dp/B09XS7JWHH", "price": 27999, "currency": "gbp"}'
-# Intent moves to AWAITING_APPROVAL
+  -d '{"intentId":"INTENT_ID","merchantName":"Amazon UK","merchantUrl":"https://amazon.co.uk/dp/B09XS7JWHH","price":27999,"currency":"gbp"}'
+# → intent moves to AWAITING_APPROVAL
 ```
 
-### Step 4 -- Request approval (user approves budget)
+### 3 — User approves the purchase
 ```bash
 curl -X POST http://localhost:3000/v1/approvals/INTENT_ID/decision \
   -H "Content-Type: application/json" \
   -H "X-Idempotency-Key: $(uuidgen)" \
-  -d '{"decision": "APPROVED", "actorId": "USER_ID"}'
-# Intent moves to APPROVED
+  -d '{"decision":"APPROVED","actorId":"USER_ID"}'
+# → intent moves to APPROVED, pot reserved in ledger
 ```
 
-### Step 5 -- Check intent status + audit trail
+### 4 — Inspect status and audit trail
 ```bash
 curl http://localhost:3000/v1/intents/INTENT_ID
 curl http://localhost:3000/v1/debug/audit/INTENT_ID
 ```
 
-### Step 6 -- Post checkout result (simulates worker completing purchase)
+### 5 — Worker posts checkout result
 ```bash
 curl -X POST http://localhost:3000/v1/agent/result \
   -H "Content-Type: application/json" \
   -H "X-Worker-Key: local-dev-worker-key" \
-  -d '{"intentId": "INTENT_ID", "success": true, "actualAmount": 27999, "receiptUrl": "https://amazon.co.uk/receipt/123"}'
-# Intent moves to DONE
+  -d '{"intentId":"INTENT_ID","success":true,"actualAmount":27999,"receiptUrl":"https://amazon.co.uk/receipt/123"}'
+# → intent moves to DONE
 ```
 
-### Step 7 -- Check ledger
+### 6 — Check ledger
 ```bash
 curl http://localhost:3000/v1/debug/ledger/USER_ID
 ```
@@ -127,68 +122,77 @@ curl http://localhost:3000/v1/debug/ledger/USER_ID
 ## API Reference
 
 ### External endpoints (Telegram-facing, later)
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/v1/intents` | Create purchase intent |
-| GET | `/v1/intents/:intentId` | Get intent + status |
-| POST | `/v1/approvals/:intentId/decision` | Approve or deny intent |
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/v1/intents` | — | Create purchase intent (`X-Idempotency-Key` required) |
+| GET | `/v1/intents/:id` | — | Get intent + audit history |
+| POST | `/v1/approvals/:id/decision` | — | Approve or deny intent |
 
-### Worker endpoints (requires `X-Worker-Key`)
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/v1/agent/quote` | Post search result/quote |
-| POST | `/v1/agent/result` | Post checkout result |
-| GET | `/v1/agent/card/:intentId` | One-time card reveal |
+### Worker endpoints
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/v1/agent/quote` | `X-Worker-Key` | Post search quote |
+| POST | `/v1/agent/result` | `X-Worker-Key` | Post checkout result |
+| GET | `/v1/agent/card/:id` | `X-Worker-Key` | One-time card reveal |
 
 ### Webhooks
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/v1/webhooks/stripe` | Stripe event receiver |
+| POST | `/v1/webhooks/stripe` | Stripe event receiver (signature verified) |
 
 ### Debug / Observability
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/v1/debug/intents` | List all intents |
 | GET | `/v1/debug/jobs` | Queue depths |
-| GET | `/v1/debug/ledger/:userId` | User ledger history |
+| GET | `/v1/debug/ledger/:userId` | User ledger + pot history |
 | GET | `/v1/debug/audit/:intentId` | Intent audit trail |
 | GET | `/health` | Health check |
 
 ## Environment Variables
-```
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/agentpay
-REDIS_URL=redis://localhost:6379
-STRIPE_SECRET_KEY=sk_test_...          # get from Stripe dashboard (test mode)
-STRIPE_WEBHOOK_SECRET=whsec_...       # from: stripe listen --forward-to ...
-WORKER_API_KEY=local-dev-worker-key   # shared secret for worker endpoints
-PORT=3000
-```
+
+| Variable | Description |
+|----------|-------------|
+| `DATABASE_URL` | PostgreSQL connection string |
+| `REDIS_URL` | Redis connection string |
+| `STRIPE_SECRET_KEY` | Stripe test-mode secret key (`sk_test_...`) |
+| `STRIPE_WEBHOOK_SECRET` | Stripe webhook signing secret (`whsec_...`) |
+| `WORKER_API_KEY` | Shared secret for worker endpoints |
+| `PORT` | HTTP port (default: 3000) |
 
 ## Running Tests
+
 ```bash
-npm test                              # all unit tests
-npm test -- --testPathPattern=api     # API gateway tests only
-npm test -- --testPathPattern=orchestrator  # state machine tests
-npm test -- --testPathPattern=payments     # Stripe service tests
-npm test -- --testPathPattern=policy       # policy engine tests
-npm test -- --testPathPattern=ledger       # ledger tests
-npm test -- --testPathPattern=queue        # queue tests
-npm test -- --testPathPattern=e2e          # E2E integration tests
+npm test                                          # all unit tests
+npm test -- --testPathPattern=e2e                 # E2E integration tests
+npm test -- --testPathPattern=orchestrator        # state machine
+npm test -- --testPathPattern=payments            # Stripe service
+npm test -- --testPathPattern=api                 # API gateway
+npm test -- --testPathPattern="policy|approval|ledger"  # policy + ledger
+npm test -- --testPathPattern=queue               # BullMQ
 ```
+
+## Security
+
+- **No PAN/CVC storage** — `VirtualCard` DB record holds only `stripeCardId` + `last4`
+- **One-time card reveal** — `GET /v1/agent/card/:id` sets `revealedAt`; second call returns 409
+- **Worker authentication** — all `/v1/agent/*` routes require `X-Worker-Key`
+- **Webhook verification** — Stripe webhooks verified with `stripe.webhooks.constructEvent()`
+- **Idempotency** — all `POST` requests accept `X-Idempotency-Key`; duplicates replay stored responses
 
 ## Troubleshooting
 
 **"Missing required env var: DATABASE_URL"**
-Copy `.env.example` to `.env` and fill in values.
+→ Copy `.env.example` to `.env` and fill in values.
 
-**"Can't reach database server"**
-Run `docker compose up -d` to start Postgres and Redis.
+**"Can't reach database server at localhost:5432"**
+→ Run `docker compose up -d`
 
 **"Stripe webhook signature verification failed"**
-Make sure `stripe listen --forward-to localhost:3000/v1/webhooks/stripe` is running and `STRIPE_WEBHOOK_SECRET` matches the secret printed by that command.
+→ Make sure `stripe listen --forward-to ...` is running and `STRIPE_WEBHOOK_SECRET` matches.
 
-**Tests failing with "Cannot find module '@/contracts'"**
-Run `npx prisma generate` first to generate the Prisma client (needed for the enum re-exports).
+**Tests failing: "Cannot find module '@prisma/client'"**
+→ Run `npx prisma generate` (generates the Prisma client with enums).
 
 **BullMQ jobs not processing**
-Start the stub worker: `npm run worker`. Verify Redis is running: `docker compose ps`.
+→ Start `npm run worker` and verify Redis is running: `docker compose ps`.
