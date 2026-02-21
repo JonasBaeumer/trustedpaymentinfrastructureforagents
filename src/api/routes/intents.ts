@@ -3,6 +3,8 @@ import { prisma } from '@/db/client';
 import { idempotencyMiddleware, saveIdempotencyResponse } from '@/api/middleware/idempotency';
 import { createIntentSchema } from '@/api/validators/intents';
 import { IntentStatus } from '@/contracts';
+import { startSearching } from '@/orchestrator/intentService';
+import { enqueueSearch } from '@/queue/producers';
 
 export async function intentRoutes(fastify: FastifyInstance): Promise<void> {
   // POST /v1/intents
@@ -39,7 +41,11 @@ export async function intentRoutes(fastify: FastifyInstance): Promise<void> {
       },
     });
 
-    const responseBody = { intentId: intent.id, status: intent.status, createdAt: intent.createdAt };
+    // Advance to SEARCHING and enqueue search job
+    await startSearching(intent.id);
+    await enqueueSearch(intent.id, { intentId: intent.id, userId, query, maxBudget, currency });
+
+    const responseBody = { intentId: intent.id, status: IntentStatus.SEARCHING, createdAt: intent.createdAt };
     await saveIdempotencyResponse(idempotencyKey, responseBody);
 
     return reply.status(201).send(responseBody);

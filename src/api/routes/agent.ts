@@ -1,11 +1,15 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { workerAuthMiddleware } from '@/api/middleware/auth';
 import { agentQuoteSchema, agentResultSchema } from '@/api/validators/agent';
-import { prisma } from '@/db/client';
 import { IntentStatus } from '@/contracts';
+import { receiveQuote, requestApproval, completeCheckout, failCheckout } from '@/orchestrator/intentService';
+import { settleIntent, returnIntent } from '@/ledger/potService';
+import { revealCard, cancelCard } from '@/payments/cardService';
+import { prisma } from '@/db/client';
 
 export async function agentRoutes(fastify: FastifyInstance): Promise<void> {
-  // POST /v1/agent/quote
+  // POST /v1/agent/quote — worker posts search result
+  // Flow: SEARCHING → QUOTED → AWAITING_APPROVAL
   fastify.post('/v1/agent/quote', {
     preHandler: workerAuthMiddleware,
   }, async (request: FastifyRequest, reply: FastifyReply) => {
@@ -21,21 +25,18 @@ export async function agentRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.status(409).send({ error: `Intent must be in SEARCHING state (current: ${intent.status})` });
     }
 
-    await prisma.purchaseIntent.update({
-      where: { id: intentId },
-      data: {
-        status: IntentStatus.AWAITING_APPROVAL,
-        metadata: { merchantName, merchantUrl, price, currency } as any,
-      },
-    });
-    await prisma.auditEvent.create({
-      data: { intentId, actor: 'worker', event: 'QUOTE_RECEIVED', payload: { merchantName, merchantUrl, price, currency } },
-    });
+    // SEARCHING → QUOTED (stores quote data in metadata via orchestrator)
+    await receiveQuote(intentId, { merchantName, merchantUrl, price, currency });
+
+    // QUOTED → AWAITING_APPROVAL
+    await requestApproval(intentId);
 
     return reply.send({ intentId, status: IntentStatus.AWAITING_APPROVAL });
   });
 
-  // POST /v1/agent/result
+  // POST /v1/agent/result — worker posts checkout outcome
+  // Flow on success: CHECKOUT_RUNNING → DONE, settle ledger, cancel card
+  // Flow on failure: CHECKOUT_RUNNING → FAILED, return ledger funds, cancel card
   fastify.post('/v1/agent/result', {
     preHandler: workerAuthMiddleware,
   }, async (request: FastifyRequest, reply: FastifyReply) => {
@@ -51,35 +52,45 @@ export async function agentRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.status(409).send({ error: `Intent must be in CHECKOUT_RUNNING state (current: ${intent.status})` });
     }
 
-    const newStatus = success ? IntentStatus.DONE : IntentStatus.FAILED;
+    if (success) {
+      await completeCheckout(intentId, actualAmount ?? 0);
+      await settleIntent(intentId, actualAmount ?? 0);
+    } else {
+      await failCheckout(intentId, errorMessage ?? 'Checkout failed');
+      await returnIntent(intentId);
+    }
+
+    // Cancel the virtual card — one purchase, one card (best-effort)
+    await cancelCard(intentId).catch(() => {});
+
+    // Store receipt/error info in metadata
     await prisma.purchaseIntent.update({
       where: { id: intentId },
-      data: { status: newStatus, metadata: { ...(intent.metadata as object), actualAmount, receiptUrl, errorMessage } as any },
-    });
-    await prisma.auditEvent.create({
-      data: { intentId, actor: 'worker', event: success ? 'CHECKOUT_SUCCEEDED' : 'CHECKOUT_FAILED', payload: { actualAmount, receiptUrl, errorMessage } },
+      data: { metadata: { ...(intent.metadata as object), actualAmount, receiptUrl, errorMessage } as any },
     });
 
-    return reply.send({ intentId, status: newStatus });
+    const finalStatus = success ? IntentStatus.DONE : IntentStatus.FAILED;
+    return reply.send({ intentId, status: finalStatus });
   });
 
-  // GET /v1/agent/card/:intentId
+  // GET /v1/agent/card/:intentId — one-time card reveal via Stripe
+  // cardService enforces the single-reveal rule and fetches PAN/CVC from Stripe
   fastify.get('/v1/agent/card/:intentId', {
     preHandler: workerAuthMiddleware,
   }, async (request: FastifyRequest<{ Params: { intentId: string } }>, reply: FastifyReply) => {
     const { intentId } = request.params;
-    const card = await prisma.virtualCard.findUnique({ where: { intentId } });
-    if (!card) return reply.status(404).send({ error: `No card found for intent: ${intentId}` });
-    if (card.revealedAt) return reply.status(409).send({ error: 'Card has already been revealed' });
 
-    await prisma.virtualCard.update({ where: { intentId }, data: { revealedAt: new Date() } });
-    // In real implementation, fetch from Stripe. Return placeholder for now.
-    return reply.send({
-      intentId,
-      stripeCardId: card.stripeCardId,
-      last4: card.last4,
-      // Stripe card details would be fetched here in production
-      note: 'Full card details fetched from Stripe in production via cardService.revealCard()',
-    });
+    try {
+      const reveal = await revealCard(intentId);
+      return reply.send({ intentId, ...reveal });
+    } catch (err: any) {
+      if (err.name === 'CardAlreadyRevealedError') {
+        return reply.status(409).send({ error: 'Card has already been revealed' });
+      }
+      if (err.name === 'IntentNotFoundError') {
+        return reply.status(404).send({ error: `No card found for intent: ${intentId}` });
+      }
+      throw err;
+    }
   });
 }

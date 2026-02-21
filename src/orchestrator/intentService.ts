@@ -24,6 +24,11 @@ export async function startSearching(intentId: string): Promise<TransitionResult
 }
 
 export async function receiveQuote(intentId: string, quotePayload: Record<string, unknown>): Promise<TransitionResult> {
+  // Persist quote data in metadata so the approval route can read merchant/price info
+  await prisma.purchaseIntent.update({
+    where: { id: intentId },
+    data: { metadata: quotePayload as any },
+  });
   return transitionIntent(intentId, IntentEvent.QUOTE_RECEIVED, quotePayload);
 }
 

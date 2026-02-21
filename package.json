@@ -3,25 +3,25 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
-    "worker": "ts-node src/worker/stubWorker.ts",
+    "dev": "ts-node-dev --respawn --transpile-only -r tsconfig-paths/register src/server.ts",
+    "worker": "ts-node -r tsconfig-paths/register src/worker/stubWorker.ts",
     "build": "tsc",
     "test": "jest",
     "test:integration": "jest --testPathPattern=integration",
     "db:migrate": "prisma migrate dev",
     "db:reset": "prisma migrate reset --force",
-    "seed": "ts-node src/db/seed.ts"
+    "seed": "ts-node -r tsconfig-paths/register src/db/seed.ts"
   },
   "dependencies": {
+    "@fastify/cors": "^9.0.1",
     "@prisma/client": "^5.14.0",
     "bullmq": "^5.12.0",
-    "fastify": "^4.28.0",
-    "@fastify/cors": "^9.0.1",
-    "stripe": "^16.0.0",
-    "zod": "^3.23.8",
     "dotenv": "^16.4.5",
+    "fastify": "^4.28.0",
     "ioredis": "^5.4.1",
-    "pino": "^9.3.1"
+    "pino": "^9.3.1",
+    "stripe": "^16.0.0",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/jest": "^29.5.12",
@@ -31,6 +31,7 @@
     "ts-jest": "^29.1.5",
     "ts-node": "^10.9.2",
     "ts-node-dev": "^2.0.0",
+    "tsconfig-paths": "^4.2.0",
     "typescript": "^5.5.2"
   }
 }

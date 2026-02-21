@@ -79,6 +79,7 @@ jest.mock('@/db/client', () => ({
             ...intent,
             auditEvents: store.auditEvents.filter((e) => e.intentId === intent.id),
             virtualCard: store.cards[intent.id] ?? null,
+            user: store.users[intent.userId] ?? null,
           });
         }
         return Promise.resolve(intent);
@@ -242,14 +243,11 @@ describe('Happy path: RECEIVED → DONE', () => {
     expect(res.statusCode).toBe(201);
     const body = JSON.parse(res.body);
     expect(body.intentId).toBeDefined();
-    expect(body.status).toBe('RECEIVED');
     intentId = body.intentId;
+    expect(body.status).toBe('SEARCHING');
   });
 
   it('POST /v1/agent/quote — worker posts quote', async () => {
-    // manually set status to SEARCHING so the route accepts it
-    store.intents[intentId].status = 'SEARCHING';
-
     const res = await app.inject({
       method: 'POST',
       url: '/v1/agent/quote',
@@ -284,8 +282,6 @@ describe('Happy path: RECEIVED → DONE', () => {
   });
 
   it('POST /v1/agent/result — worker posts success', async () => {
-    store.intents[intentId].status = 'CHECKOUT_RUNNING';
-
     const res = await app.inject({
       method: 'POST',
       url: '/v1/agent/result',
