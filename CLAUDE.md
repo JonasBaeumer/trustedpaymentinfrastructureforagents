@@ -49,7 +49,7 @@ stripe listen --forward-to localhost:3000/v1/webhooks/stripe
 ## Architecture
 
 ```
-Telegram (later) ──┐
+Telegram bot ──────┐
 OpenClaw worker ───┤──▶ API Gateway (Fastify)
 Stripe webhooks ───┘          │
                               ├──▶ Orchestrator (state machine)
@@ -74,6 +74,7 @@ Stripe webhooks ───┘          │
 | Payments | `src/payments/` | Stripe Issuing card lifecycle |
 | Policy + Ledger | `src/policy/`, `src/approval/`, `src/ledger/` | Rules engine, approvals, Monzo pots |
 | Queue + Worker | `src/queue/`, `src/worker/`, `src/config/redis.ts` | BullMQ + stub worker |
+| Telegram | `src/telegram/` | Bot client, approval notifications, user signup handler |
 
 **Rule: never edit another module's files.** Cross-module calls use direct function imports from the published module interface, not HTTP.
 
@@ -124,6 +125,9 @@ REDIS_URL=redis://localhost:6379
 STRIPE_SECRET_KEY=sk_test_...
 STRIPE_WEBHOOK_SECRET=whsec_...
 WORKER_API_KEY=local-dev-worker-key
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_WEBHOOK_SECRET=...
+TELEGRAM_TEST_CHAT_ID=        # optional, local dev only
 PORT=3000
 ```
 
@@ -131,6 +135,5 @@ Copy `.env.example` to `.env` for local dev.
 
 ## What Is NOT in Scope (yet)
 
-- Telegram bot implementation (backend endpoints are ready for it)
 - Real OpenClaw / Playwright worker (stub worker handles local testing)
 - Production hardening, auth on user-facing routes, PII tokenization

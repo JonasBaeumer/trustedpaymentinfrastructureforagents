@@ -109,7 +109,7 @@ curl -X POST http://localhost:3000/v1/intents \
   -H "Content-Type: application/json" \
   -H "X-Idempotency-Key: $(uuidgen)" \
   -d '{"userId":"USER_ID","query":"Sony WH-1000XM5 headphones","maxBudget":30000,"currency":"gbp"}'
-# → {"intentId":"clxxx...","status":"RECEIVED"}
+# → {"intentId":"clxxx...","status":"SEARCHING"}
 ```
 
 ### 2 — Post a quote (simulates worker search)
@@ -152,24 +152,28 @@ curl http://localhost:3000/v1/debug/ledger/USER_ID
 
 ## API Reference
 
-### External endpoints (Telegram-facing, later)
+### External endpoints
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | POST | `/v1/intents` | — | Create purchase intent (`X-Idempotency-Key` required) |
 | GET | `/v1/intents/:id` | — | Get intent + audit history |
 | POST | `/v1/approvals/:id/decision` | — | Approve or deny intent |
 
-### Worker endpoints
+### Agent / worker endpoints
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
+| POST | `/v1/agent/register` | `X-Worker-Key` | Register OpenClaw instance, get pairing code |
+| GET | `/v1/agent/user` | `X-Worker-Key` + `X-Agent-Id` | Resolve userId after user signs up |
 | POST | `/v1/agent/quote` | `X-Worker-Key` | Post search quote |
+| GET | `/v1/agent/decision/:intentId` | `X-Worker-Key` | Poll decision + one-time card delivery |
 | POST | `/v1/agent/result` | `X-Worker-Key` | Post checkout result |
-| GET | `/v1/agent/card/:id` | `X-Worker-Key` | One-time card reveal |
+| GET | `/v1/agent/card/:intentId` | `X-Worker-Key` | Direct one-time card reveal (alternative to decision) |
 
 ### Webhooks
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/v1/webhooks/stripe` | Stripe event receiver (signature verified) |
+| POST | `/v1/webhooks/telegram` | Telegram update receiver (secret token verified) |
 
 ### Debug / Observability
 | Method | Path | Description |
@@ -189,6 +193,9 @@ curl http://localhost:3000/v1/debug/ledger/USER_ID
 | `STRIPE_SECRET_KEY` | Stripe test-mode secret key (`sk_test_...`) |
 | `STRIPE_WEBHOOK_SECRET` | Stripe webhook signing secret (`whsec_...`) |
 | `WORKER_API_KEY` | Shared secret for worker endpoints |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token from BotFather |
+| `TELEGRAM_WEBHOOK_SECRET` | Secret token for verifying Telegram webhook requests |
+| `TELEGRAM_TEST_CHAT_ID` | (Optional) Chat ID for local dev smoke tests |
 | `PORT` | HTTP port (default: 3000) |
 
 ## Running Tests
