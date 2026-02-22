@@ -10,6 +10,14 @@
 
 // ─── Service mocks ────────────────────────────────────────────────────────────
 
+// checkout simulator
+const mockRunSimulatedCheckout = jest.fn().mockResolvedValue({
+  success: true, chargeId: 'pi_wiring_test', amount: 5000, currency: 'eur',
+});
+jest.mock('@/payments/checkoutSimulator', () => ({
+  runSimulatedCheckout: mockRunSimulatedCheckout,
+}));
+
 jest.mock('@/config/env', () => ({
   env: {
     WORKER_API_KEY: 'test-worker-key',
@@ -880,5 +888,44 @@ describe('GET /v1/agent/user wiring', () => {
     const body = JSON.parse(res.body);
     expect(body.status).toBe('claimed');
     expect(body.userId).toBe('user-signup-1');
+  });
+});
+
+// ─── POST /v1/checkout/simulate ───────────────────────────────────────────────
+
+describe('POST /v1/checkout/simulate wiring', () => {
+  it('is reachable — returns 400 on empty body (not 404)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/checkout/simulate',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('calls runSimulatedCheckout with parsed body and returns 200', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/checkout/simulate',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        cardNumber: '4242424242424242',
+        cvc: '123',
+        expMonth: 12,
+        expYear: 2027,
+        amount: 5000,
+        currency: 'eur',
+        merchantName: 'Test Merchant',
+      }),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockRunSimulatedCheckout).toHaveBeenCalledWith(
+      expect.objectContaining({ cardNumber: '4242424242424242', amount: 5000, currency: 'eur' }),
+    );
+    const body = JSON.parse(res.body);
+    expect(body.success).toBe(true);
+    expect(body.chargeId).toBe('pi_wiring_test');
   });
 });

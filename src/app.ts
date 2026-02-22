@@ -5,6 +5,7 @@ import { agentRoutes } from '@/api/routes/agent';
 import { webhookRoutes } from '@/api/routes/webhooks';
 import { debugRoutes } from '@/api/routes/debug';
 import { telegramRoutes } from '@/api/routes/telegram';
+import { checkoutRoutes } from '@/api/routes/checkout';
 
 export function buildApp() {
   const fastify = Fastify({
@@ -35,6 +36,7 @@ export function buildApp() {
   fastify.register(webhookRoutes);
   fastify.register(debugRoutes);
   fastify.register(telegramRoutes);
+  fastify.register(checkoutRoutes);
 
   fastify.get('/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }));
 

@@ -74,7 +74,7 @@ export async function handleTelegramMessage(update: Update): Promise<void> {
         email,
         telegramChatId: chatId.toString(),
         agentId: session.agentId,
-        mainBalance: 0,
+        mainBalance: 1_000_000, // 10 000 EUR in cents
         maxBudgetPerIntent: 50000,
       },
     });
