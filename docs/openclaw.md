@@ -97,7 +97,11 @@ OpenClaw                              Backend
   │◀── { status: APPROVED,              │  5. Approved — card details delivered once
   │      card: { number, cvc, ... }} ───│
   │                                     │
-  │  6. Complete checkout using card    │
+  │  6. Simulate checkout using card    │
+  │── POST /v1/checkout/simulate ──────▶│  6a. Merchant charges the card
+  │   { cardNumber, cvc, expMonth,      │      (triggers Stripe Issuing auth)
+  │     expYear, amount }               │
+  │◀── { success, chargeId, amount } ───│
   │                                     │
   │── POST /v1/agent/result ───────────▶│  7. Report outcome
   │   { intentId, success, ... }        │
@@ -423,6 +427,81 @@ or on failure:
 | `401` | Missing or wrong `X-Worker-Key` |
 | `404` | `intentId` not found |
 | `409` | Intent is not in `CHECKOUT_RUNNING` state |
+
+---
+
+---
+
+### POST /v1/checkout/simulate
+
+Simulate a merchant charging a virtual card. Use this after receiving card credentials
+from `GET /v1/agent/decision/:intentId` to trigger the full Stripe Issuing authorization
+flow without a real browser checkout.
+
+> **Test mode only.** This endpoint accepts raw card credentials and creates a real Stripe
+> PaymentIntent against them. It is decoupled from the intent state machine — it does not
+> know about intents, pots, or ledger entries. Those are settled separately via
+> `POST /v1/agent/result`.
+
+**Auth:** None — the card's own spending controls (set at issuance) are the security layer.
+
+**Request body:**
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `cardNumber` | `string` | Yes | 13–19 digit card number from `/decision` |
+| `cvc` | `string` | Yes | 3–4 digit CVC from `/decision` |
+| `expMonth` | `integer` | Yes | 1–12 |
+| `expYear` | `integer` | Yes | 4-digit year |
+| `amount` | `integer` | Yes | Smallest currency unit (cents/pence), max 1 000 000 |
+| `currency` | `string` | No | 3-letter ISO code; default `eur` |
+| `merchantName` | `string` | No | Display label; default `Simulated Merchant` |
+
+```json
+{
+  "cardNumber": "4242424242424242",
+  "cvc": "123",
+  "expMonth": 12,
+  "expYear": 2027,
+  "amount": 5000,
+  "currency": "eur",
+  "merchantName": "Amazon DE"
+}
+```
+
+**Success response `200`:**
+
+```json
+{
+  "success": true,
+  "chargeId": "pi_...",
+  "amount": 5000,
+  "currency": "eur"
+}
+```
+
+**Declined response `402`:**
+
+```json
+{
+  "success": false,
+  "declineCode": "spending_controls_violation",
+  "message": "Your card's spending limit has been exceeded."
+}
+```
+
+The `declineCode` mirrors Stripe's `decline_code`. Common values:
+- `card_declined` — generic decline
+- `spending_controls_violation` — amount exceeds the card's budget limit
+- `do_not_honor` — issuer blocked the transaction
+
+**Error responses:**
+
+| Status | Condition |
+|--------|-----------|
+| `400` | Missing or invalid fields (cardNumber, cvc format, expYear in the past, etc.) |
+| `402` | Card declined by Stripe |
+| `500` | Unexpected error |
 
 ---
 

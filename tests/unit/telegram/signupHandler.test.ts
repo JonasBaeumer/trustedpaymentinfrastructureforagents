@@ -143,6 +143,8 @@ describe('email step handling', () => {
           email: 'alice@example.com',
           telegramChatId: chatId.toString(),
           agentId: 'ag_test',
+          mainBalance: 1_000_000,
+          maxBudgetPerIntent: 50000,
         }),
       }),
     );
