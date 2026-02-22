@@ -1,0 +1,58 @@
+# --- Secrets (keep these) ---
+.env
+apps/telegram-bot/.env
+
+# Ignore any env variants, but keep examples
+.env.*
+!.env.example
+apps/telegram-bot/.env.*
+!apps/telegram-bot/.env.example
+
+# --- Node / package managers ---
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-debug.log*
+
+# pnpm store/cache (some setups use local store dirs)
+.pnpm-store/
+**/.pnpm-store/
+
+# --- Build outputs / coverage ---
+dist/
+build/
+out/
+coverage/
+*.tsbuildinfo
+
+# Framework/tool caches (safe to ignore)
+.cache/
+.turbo/
+.vercel/
+.next/
+
+# --- Logs / temp ---
+logs/
+*.log
+*.tmp
+*.swp
+*.swo
+
+# --- Prisma local db files (DO NOT ignore schema or migrations) ---
+prisma/*.db
+prisma/*.db-journal
+prisma/dev.db
+prisma/dev.db-journal
+
+# --- Docker local overrides ---
+docker-compose.override.yml
+
+# --- OS / Editor ---
+.DS_Store
+Thumbs.db
+.idea/
+*.iml
+.vscode/
+!.vscode/extensions.json
