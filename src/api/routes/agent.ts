@@ -1,12 +1,22 @@
+import { randomUUID } from 'crypto';
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { workerAuthMiddleware } from '@/api/middleware/auth';
-import { agentQuoteSchema, agentResultSchema } from '@/api/validators/agent';
+import { agentQuoteSchema, agentResultSchema, agentRegisterSchema } from '@/api/validators/agent';
 import { IntentStatus } from '@/contracts';
 import { receiveQuote, requestApproval, completeCheckout, failCheckout } from '@/orchestrator/intentService';
 import { settleIntent, returnIntent } from '@/ledger/potService';
 import { revealCard, cancelCard } from '@/payments/cardService';
 import { prisma } from '@/db/client';
 import { sendApprovalRequest } from '@/telegram/notificationService';
+
+const PAIRING_CODE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const PAIRING_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no ambiguous O/0/I/1
+
+function generatePairingCode(): string {
+  return Array.from({ length: 8 }, () =>
+    PAIRING_CODE_CHARS[Math.floor(Math.random() * PAIRING_CODE_CHARS.length)],
+  ).join('');
+}
 
 export async function agentRoutes(fastify: FastifyInstance): Promise<void> {
   // POST /v1/agent/quote — worker posts search result
@@ -144,5 +154,67 @@ export async function agentRoutes(fastify: FastifyInstance): Promise<void> {
       }
       throw err;
     }
+  });
+
+  // POST /v1/agent/register — register OpenClaw instance and get a pairing code
+  // Body: { agentId?: string }  — omit on first call; pass existing agentId to renew code
+  // Returns: { agentId, pairingCode, expiresAt }
+  fastify.post('/v1/agent/register', {
+    preHandler: workerAuthMiddleware,
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const parsed = agentRegisterSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: 'Invalid input', details: parsed.error.errors });
+    }
+
+    const { agentId: existingAgentId } = parsed.data;
+    const expiresAt = new Date(Date.now() + PAIRING_CODE_TTL_MS);
+    const code = generatePairingCode();
+
+    if (existingAgentId) {
+      // Renewal: look up existing record by agentId
+      const existing = await prisma.pairingCode.findUnique({ where: { agentId: existingAgentId } });
+      if (!existing) {
+        return reply.status(404).send({ error: `Agent not found: ${existingAgentId}` });
+      }
+      if (existing.claimedByUserId) {
+        return reply.status(409).send({ error: 'Agent already has a linked user — re-registration not needed' });
+      }
+      // Issue a fresh code
+      const updated = await prisma.pairingCode.update({
+        where: { agentId: existingAgentId },
+        data: { code, expiresAt },
+      });
+      return reply.send({ agentId: updated.agentId, pairingCode: updated.code, expiresAt: updated.expiresAt });
+    }
+
+    // First registration: generate a stable agentId
+    const agentId = `ag_${randomUUID().replace(/-/g, '')}`;
+    const record = await prisma.pairingCode.create({
+      data: { agentId, code, expiresAt },
+    });
+    return reply.send({ agentId: record.agentId, pairingCode: record.code, expiresAt: record.expiresAt });
+  });
+
+  // GET /v1/agent/user — resolve the userId linked to an agentId
+  // Header: X-Agent-Id: <agentId>
+  // Returns: { status: "unclaimed" } | { status: "claimed", userId }
+  fastify.get('/v1/agent/user', {
+    preHandler: workerAuthMiddleware,
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const agentId = request.headers['x-agent-id'] as string | undefined;
+    if (!agentId) {
+      return reply.status(400).send({ error: 'Missing X-Agent-Id header' });
+    }
+
+    const record = await prisma.pairingCode.findUnique({ where: { agentId } });
+    if (!record) {
+      return reply.status(404).send({ error: `Agent not found: ${agentId}` });
+    }
+
+    if (!record.claimedByUserId) {
+      return reply.send({ status: 'unclaimed' });
+    }
+    return reply.send({ status: 'claimed', userId: record.claimedByUserId });
   });
 }

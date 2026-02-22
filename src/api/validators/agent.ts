@@ -16,5 +16,10 @@ export const agentResultSchema = z.object({
   errorMessage: z.string().optional(),
 });
 
+export const agentRegisterSchema = z.object({
+  agentId: z.string().min(1).optional(),
+});
+
 export type AgentQuoteInput = z.infer<typeof agentQuoteSchema>;
 export type AgentResultInput = z.infer<typeof agentResultSchema>;
+export type AgentRegisterInput = z.infer<typeof agentRegisterSchema>;
