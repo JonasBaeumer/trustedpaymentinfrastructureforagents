@@ -6,3 +6,4 @@ export * from './approval';
 export * from './audit';
 export * from './errors';
 export * from './services';
+export * from './agent';

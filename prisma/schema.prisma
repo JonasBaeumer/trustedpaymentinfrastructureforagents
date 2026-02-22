@@ -48,11 +48,21 @@ model User {
   stripeCardholderId  String?
   telegramChatId      String?
   phoneNumber         String?
+  agentId             String?         @unique
   createdAt           DateTime        @default(now())
 
   intents             PurchaseIntent[]
   ledgerEntries       LedgerEntry[]
   pots                Pot[]
+}
+
+model PairingCode {
+  id              String    @id @default(cuid())
+  code            String    @unique
+  agentId         String    @unique
+  claimedByUserId String?
+  expiresAt       DateTime
+  createdAt       DateTime  @default(now())
 }
 
 model PurchaseIntent {
