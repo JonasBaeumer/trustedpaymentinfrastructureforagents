@@ -21,6 +21,37 @@ OpenClaw initiates every call. The backend never pushes work to the agent.
 
 ---
 
+## Onboarding (first-time setup)
+
+Before any purchase can happen, OpenClaw must register with the backend and the user must
+sign up via Telegram. This is a one-time setup per OpenClaw instance.
+
+```
+OpenClaw                        Backend                         User (Telegram)
+  │                                │                                 │
+  │── POST /v1/agent/register ────▶│── { agentId, pairingCode,       │
+  │   (first time only)            │    expiresAt }                  │
+  │   stores agentId permanently   │                                 │
+  │                                │                                 │
+  │   (gives user the code + bot   │                                 │
+  │    link: t.me/YourBot)         │                                 │
+  │                                │◀── /start <pairingCode> ───────│
+  │                                │    Bot: "What's your email?"    │
+  │                                │◀── user@example.com ───────────│
+  │                                │    Bot: "✅ Account created!"   │
+  │                                │                                 │
+  │── GET /v1/agent/user ─────────▶│── { status: "claimed",         │
+  │   X-Agent-Id: <agentId>        │    userId: "clx..." }           │
+  │   (store userId permanently)   │                                 │
+```
+
+Once OpenClaw has a `userId` it can create purchase intents for that user.
+
+If the pairing code expires before the user signs up, call `POST /v1/agent/register` again
+with `{ agentId }` to get a fresh code. The `agentId` is stable and never changes.
+
+---
+
 ## Authentication
 
 Every request to an agent endpoint requires the `X-Worker-Key` header:
@@ -80,6 +111,84 @@ If the user rejects:
 ---
 
 ## Endpoints
+
+### POST /v1/agent/register
+
+Register a new OpenClaw instance (first time) or renew an expired pairing code.
+
+**Auth:** `X-Worker-Key` required.
+
+**Request body (all optional):**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `agentId` | `string` | No | Omit on first call. Pass existing `agentId` to renew a code. |
+
+```json
+{}
+```
+
+**Success response `200` — first registration:**
+
+```json
+{
+  "agentId": "ag_a1b2c3d4e5f6",
+  "pairingCode": "AB3X9K2M",
+  "expiresAt": "2026-02-22T13:00:00.000Z"
+}
+```
+
+Store `agentId` permanently. Give `pairingCode` to the user (valid for 30 minutes).
+
+**Renewal (pass existing `agentId`):**
+
+```json
+{ "agentId": "ag_a1b2c3d4e5f6" }
+```
+
+Returns the same shape with a new `pairingCode`.
+
+**Error responses:**
+
+| Status | Condition |
+|--------|-----------|
+| `401` | Missing or wrong `X-Worker-Key` |
+| `404` | `agentId` not found (renewal) |
+| `409` | Agent already has a linked user — re-registration not needed |
+
+---
+
+### GET /v1/agent/user
+
+Resolve the `userId` linked to this OpenClaw instance.
+
+**Auth:** `X-Worker-Key` required. Also supply `X-Agent-Id: <agentId>` header.
+
+**Response `200` — user not yet signed up:**
+
+```json
+{ "status": "unclaimed" }
+```
+
+Keep displaying the pairing code to the user (or renew it if expired).
+
+**Response `200` — user has signed up:**
+
+```json
+{ "status": "claimed", "userId": "clxyz123" }
+```
+
+Store `userId` permanently. Use it in all `POST /v1/intents` calls.
+
+**Error responses:**
+
+| Status | Condition |
+|--------|-----------|
+| `400` | Missing `X-Agent-Id` header |
+| `401` | Missing or wrong `X-Worker-Key` |
+| `404` | `agentId` not found |
+
+---
 
 ### POST /v1/intents
 
