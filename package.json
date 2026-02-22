@@ -1,0 +1,44 @@
+{
+  "name": "agent-safe-payments-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc",
+    "worker": "tsx src/workers/stub-worker.ts",
+    "db:migrate": "prisma migrate dev",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:seed": "tsx prisma/seed.ts",
+    "postinstall": "prisma generate",
+    "db:studio": "prisma studio",
+    "test:e2e": "./scripts/run-e2e.sh",
+    "test:smoke": "tsx scripts/smoke.ts",
+    "test": "vitest run tests/unit",
+    "test:e2e:only": "vitest run tests/e2e",
+    "bot:dev": "cd apps/telegram-bot && pnpm run bot:dev",
+    "bot:webhook": "cd apps/telegram-bot && pnpm run bot:webhook"
+  },
+  "dependencies": {
+    "@fastify/cors": "^9.0.1",
+    "@prisma/client": "^5.22.0",
+    "bullmq": "^5.25.0",
+    "fastify": "^4.28.1",
+    "ioredis": "^5.4.1",
+    "stripe": "^17.4.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "dotenv-cli": "^11.0.0",
+    "prisma": "^5.22.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.0"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  }
+}

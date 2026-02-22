@@ -1,0 +1,183 @@
+// Agent-safe shopping + payments — Prisma schema
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum IntentStatus {
+  RECEIVED
+  SEARCHING
+  QUOTED
+  AWAITING_APPROVAL
+  APPROVED
+  CARD_ISSUED
+  CHECKOUT_RUNNING
+  DONE
+  FAILED
+  DENIED
+  EXPIRED
+}
+
+enum ApprovalStatus {
+  AWAITING_APPROVAL
+  APPROVED
+  DENIED
+  EXPIRED
+}
+
+enum CardStatus {
+  ISSUED
+  REVEALED
+  CLOSED
+}
+
+enum JobType {
+  SEARCH
+  CHECKOUT
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  DONE
+  FAILED
+}
+
+model User {
+  id              String   @id @default(uuid())
+  createdAt       DateTime @default(now())
+  telegramUserId  String?  @unique @map("telegram_user_id")
+
+  purchaseIntents PurchaseIntent[]
+  pots            Pot[]
+  ledgerEntries   LedgerEntry[]
+}
+
+model PurchaseIntent {
+  id        String       @id @default(uuid())
+  userId    String       @map("user_id")
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rawText   String       @map("raw_text")
+  status    IntentStatus @default(RECEIVED)
+  currency  String       @default("USD")
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  quotes    Quote[]
+  approvals Approval[]
+  cards     Card[]
+  jobs      Job[]
+  results   Result[]
+  events    Event[]
+}
+
+model Quote {
+  id             String   @id @default(uuid())
+  intentId       String   @map("intent_id")
+  intent         PurchaseIntent @relation(fields: [intentId], references: [id], onDelete: Cascade)
+  title          String
+  url            String
+  amount         Int      // cents/smallest unit
+  currency       String   @default("USD")
+  merchantDomain String   @map("merchant_domain")
+  mccHint        String?  @map("mcc_hint")
+  createdAt      DateTime @default(now())
+}
+
+model Approval {
+  id          String         @id @default(uuid())
+  intentId    String         @map("intent_id")
+  intent      PurchaseIntent @relation(fields: [intentId], references: [id], onDelete: Cascade)
+  status      ApprovalStatus @default(AWAITING_APPROVAL)
+  amount      Int
+  currency    String         @default("USD")
+  scopeJson   String         @map("scope_json") // JSON: merchant_domain, mcc_allowlist
+  expiresAt   DateTime       @map("expires_at")
+  createdAt   DateTime       @default(now())
+  decidedAt   DateTime?      @map("decided_at")
+}
+
+model Pot {
+  id            String   @id @default(uuid())
+  userId        String   @map("user_id")
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name          String   // purpose e.g. "purchase_<intent_id>"
+  balanceAmount Int      @map("balance_amount") // cents
+  currency      String   @default("USD")
+
+  ledgerEntries LedgerEntry[]
+}
+
+model LedgerEntry {
+  id         String   @id @default(uuid())
+  userId     String   @map("user_id")
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  potId      String?  @map("pot_id")
+  pot        Pot?     @relation(fields: [potId], references: [id], onDelete: SetNull)
+  deltaAmount Int     @map("delta_amount") // positive = credit to pot, negative = debit
+  currency   String   @default("USD")
+  reason     String
+  createdAt  DateTime @default(now())
+}
+
+model Card {
+  id             String     @id @default(uuid())
+  intentId       String     @map("intent_id")
+  intent         PurchaseIntent @relation(fields: [intentId], references: [id], onDelete: Cascade)
+  stripeCardId   String     @map("stripe_card_id")
+  last4          String     @map("last4")
+  brand          String?    @default("visa")
+  status         CardStatus @default(ISSUED)
+  revealedAt     DateTime?  @map("revealed_at")
+  expiresAt      DateTime?  @map("expires_at")
+  constraintsJson String    @map("constraints_json") // spending controls
+  // Optional: encrypted card details for one-time reveal (hackathon: can store in memory or skip)
+  panEncrypted   String?   @map("pan_encrypted") // not full PAN in logs
+  expMonth       Int?      @map("exp_month")
+  expYear        Int?      @map("exp_year")
+  cvcEncrypted   String?   @map("cvc_encrypted")
+  createdAt      DateTime  @default(now())
+}
+
+model Job {
+  id        String    @id @default(uuid())
+  intentId  String    @map("intent_id")
+  intent    PurchaseIntent @relation(fields: [intentId], references: [id], onDelete: Cascade)
+  type      JobType
+  status    JobStatus @default(QUEUED)
+  attempts  Int       @default(0)
+  bullJobId String?   @map("bull_job_id")
+  createdAt DateTime  @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Result {
+  id           String   @id @default(uuid())
+  intentId     String   @map("intent_id")
+  intent       PurchaseIntent @relation(fields: [intentId], references: [id], onDelete: Cascade)
+  status       String   // DONE | FAILED
+  summary      String?
+  artifactsJson String  @map("artifacts_json") // JSON array
+  createdAt    DateTime @default(now())
+}
+
+model Event {
+  id         String   @id @default(uuid())
+  intentId   String   @map("intent_id")
+  intent     PurchaseIntent @relation(fields: [intentId], references: [id], onDelete: Cascade)
+  type       String
+  payloadJson String  @map("payload_json")
+  createdAt  DateTime @default(now())
+}
+
+model StripeEvent {
+  id            String   @id @default(uuid())
+  stripeEventId String   @unique @map("stripe_event_id")
+  type         String   @map("type")
+  payloadJson  String   @map("payload_json")
+  createdAt    DateTime @default(now())
+}
