@@ -35,6 +35,11 @@ export async function issueVirtualCard(
         email: intent.user.email,
         phone_number: intent.user.phoneNumber ?? '+15555555555',
         type: 'individual',
+        individual: {
+          first_name: 'Agent',
+          last_name: 'Buyer',
+          dob: { day: 1, month: 1, year: 1980 },
+        },
         billing: {
           address: {
             line1: '1 Agent St',
@@ -67,6 +72,7 @@ export async function issueVirtualCard(
         cardholder: cardholderId,
         currency: currency.toLowerCase(),
         type: 'virtual',
+        status: 'active',
         spending_controls: buildSpendingControls(amount, options.mccAllowlist),
         metadata: {
           intentId,

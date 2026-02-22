@@ -155,7 +155,7 @@ testSuite('Stripe Issuing card lifecycle + checkout simulation', () => {
       const stripeCard = await stripe.issuing.cards.retrieve(stripeCardId);
 
       expect(stripeCard.type).toBe('virtual');
-      expect(['active', 'inactive']).toContain(stripeCard.status); // depends on cardholder KYC state
+      expect(stripeCard.status).toBe('active');
       expect(stripeCard.last4).toBe(credentials.last4);
       expect(stripeCard.spending_controls.spending_limits[0].amount).toBe(100);
       expect(stripeCard.spending_controls.spending_limits[0].interval).toBe('per_authorization');
@@ -168,6 +168,14 @@ testSuite('Stripe Issuing card lifecycle + checkout simulation', () => {
   // data API access. It creates a real authorization visible in the dashboard.
 
   describe('spending controls enforcement', () => {
+    beforeAll(async () => {
+      // Stripe test mode: freshly created individual cardholders need ~2s for
+      // their verification state to settle. Without this wait, the first 1-2
+      // authorizations are declined with cardholder_verification_required
+      // regardless of spending limit or verification_data provided.
+      await new Promise((r) => setTimeout(r, 3000));
+    });
+
     it('declines a test authorization that exceeds the €1 spending limit', async () => {
       const stripe = getStripeClient();
 
@@ -181,6 +189,24 @@ testSuite('Stripe Issuing card lifecycle + checkout simulation', () => {
       // Stripe declines spending-controls violations at authorization time
       expect(auth.approved).toBe(false);
       expect(auth.status).toBe('closed');
+    });
+
+    it('approves and captures a test authorization within the €1 spending limit', async () => {
+      const stripe = getStripeClient();
+
+      // Attempt €0.50 against a €1 limit — should be approved
+      const auth = await stripe.testHelpers.issuing.authorizations.create({
+        card: stripeCardId,
+        amount: 50, // €0.50 — within the €1 per_authorization limit
+        currency: 'eur',
+      });
+
+      expect(auth.approved).toBe(true);
+      expect(auth.status).toBe('pending');
+
+      // Capture creates an issuing_transaction and settles the authorization
+      const captured = await stripe.testHelpers.issuing.authorizations.capture(auth.id);
+      expect(captured.status).toBe('closed');
     });
 
   });
