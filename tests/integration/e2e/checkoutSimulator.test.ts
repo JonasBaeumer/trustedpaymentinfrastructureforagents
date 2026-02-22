@@ -213,38 +213,17 @@ testSuite('Stripe Issuing card lifecycle + checkout simulation', () => {
 
   // ─── 3. runSimulatedCheckout ─────────────────────────────────────────────────
   //
-  // Requires "raw card data APIs" to be enabled on your Stripe test account:
-  //   Stripe Dashboard → Settings → Account settings → Raw card data APIs
-  //
-  // Tests are skipped with a clear warning when this is not enabled;
-  // all other tests in this file still pass.
+  // Uses stripe.testHelpers.issuing.authorizations.create + capture.
+  // No raw card data APIs required — works on any standard Stripe test account.
 
-  describe('runSimulatedCheckout with revealed Issuing card credentials', () => {
-    async function tryCheckout(amount: number) {
-      try {
-        return await runSimulatedCheckout({
-          cardNumber: credentials.number,
-          cvc: credentials.cvc,
-          expMonth: credentials.expMonth,
-          expYear: credentials.expYear,
-          amount,
-          currency: 'eur',
-          merchantName: 'Integration Test Merchant',
-        });
-      } catch (err: any) {
-        if (err.message?.includes('raw card data')) {
-          return 'raw_card_api_disabled' as const;
-        }
-        throw err;
-      }
-    }
-
+  describe('runSimulatedCheckout via intentId (test helpers)', () => {
     it('declines when charge amount exceeds the spending limit', async () => {
-      const result = await tryCheckout(5000); // €50 against €1 card
-      if (result === 'raw_card_api_disabled') {
-        console.warn('⚠️  Skipped: enable raw card data APIs in Stripe Dashboard to run this test');
-        return;
-      }
+      const result = await runSimulatedCheckout({
+        intentId,
+        amount: 5000, // €50 against €1 card — should be declined
+        currency: 'eur',
+        merchantName: 'Integration Test Merchant',
+      });
 
       expect(result.success).toBe(false);
       expect(result.declineCode).toBeDefined();
