@@ -85,6 +85,12 @@ jest.mock('@/payments/stripeClient', () => ({
   getStripeClient: () => ({ webhooks: { constructEvent: jest.fn() } }),
 }));
 
+// Telegram notification service
+const mockSendApprovalRequest = jest.fn().mockResolvedValue(undefined);
+jest.mock('@/telegram/notificationService', () => ({
+  sendApprovalRequest: mockSendApprovalRequest,
+}));
+
 // DB
 const dbUsers: Record<string, any> = {
   'user-1': {
@@ -93,6 +99,7 @@ const dbUsers: Record<string, any> = {
   },
 };
 const dbIntents: Record<string, any> = {};
+const dbVirtualCards: Record<string, any> = {}; // keyed by intentId
 const dbIdempotency: Record<string, any> = {};
 
 jest.mock('@/db/client', () => ({
@@ -106,7 +113,11 @@ jest.mock('@/db/client', () => ({
         dbIntents[intent.id] = intent;
         return Promise.resolve(intent);
       }),
-      findUnique: jest.fn(({ where }: any) => Promise.resolve(dbIntents[where.id] ?? null)),
+      findUnique: jest.fn(({ where, include }: any) => {
+        const intent = dbIntents[where.id] ?? null;
+        if (!intent || !include?.virtualCard) return Promise.resolve(intent);
+        return Promise.resolve({ ...intent, virtualCard: dbVirtualCards[intent.id] ?? null });
+      }),
       update: jest.fn(({ where, data }: any) => {
         dbIntents[where.id] = { ...dbIntents[where.id], ...data };
         return Promise.resolve(dbIntents[where.id]);
@@ -144,6 +155,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   // Reset DB state
   Object.keys(dbIntents).forEach((k) => delete dbIntents[k]);
+  Object.keys(dbVirtualCards).forEach((k) => delete dbVirtualCards[k]);
   Object.keys(dbIdempotency).forEach((k) => delete dbIdempotency[k]);
 });
 
@@ -235,6 +247,22 @@ describe('POST /v1/agent/quote wiring', () => {
 
     expect(mockReceiveQuote).not.toHaveBeenCalled();
     expect(mockRequestApproval).not.toHaveBeenCalled();
+  });
+
+  it('fires sendApprovalRequest after requestApproval succeeds', async () => {
+    seedSearchingIntent('intent-q3');
+
+    await app.inject({
+      method: 'POST',
+      url: '/v1/agent/quote',
+      headers: { 'content-type': 'application/json', 'x-worker-key': 'test-worker-key' },
+      body: JSON.stringify({ intentId: 'intent-q3', merchantName: 'Amazon UK', merchantUrl: 'https://amazon.co.uk', price: 9999, currency: 'gbp' }),
+    });
+
+    // Allow the fire-and-forget promise to settle
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(mockSendApprovalRequest).toHaveBeenCalledWith('intent-q3');
   });
 });
 
@@ -537,5 +565,160 @@ describe('GET /v1/agent/card/:intentId wiring', () => {
     });
 
     expect(res.statusCode).toBe(404);
+  });
+});
+
+// ─── GET /v1/agent/decision/:intentId ─────────────────────────────────────────
+
+describe('GET /v1/agent/decision/:intentId wiring', () => {
+  function seedIntent(id: string, status: string, virtualCard?: any) {
+    dbIntents[id] = { id, userId: 'user-1', status, metadata: {}, maxBudget: 10000, currency: 'gbp' };
+    if (virtualCard !== undefined) {
+      dbVirtualCards[id] = virtualCard;
+    }
+  }
+
+  function makeCard(intentId: string, revealedAt: Date | null = null) {
+    return { id: 'vc-1', intentId, stripeCardId: 'ic_test', last4: '4242', revealedAt };
+  }
+
+  it('returns 401 without X-Worker-Key header', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/agent/decision/intent-dec1',
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('returns 404 when intent not found', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/agent/decision/nonexistent',
+      headers: { 'x-worker-key': 'test-worker-key' },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('returns AWAITING_APPROVAL without calling revealCard', async () => {
+    seedIntent('intent-dec3', IntentStatus.AWAITING_APPROVAL);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/agent/decision/intent-dec3',
+      headers: { 'x-worker-key': 'test-worker-key' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).status).toBe(IntentStatus.AWAITING_APPROVAL);
+    expect(mockRevealCard).not.toHaveBeenCalled();
+  });
+
+  it('returns DENIED without calling revealCard', async () => {
+    seedIntent('intent-dec4', IntentStatus.DENIED);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/agent/decision/intent-dec4',
+      headers: { 'x-worker-key': 'test-worker-key' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).status).toBe(IntentStatus.DENIED);
+    expect(mockRevealCard).not.toHaveBeenCalled();
+  });
+
+  it('returns APPROVED with card details when CARD_ISSUED and not yet revealed', async () => {
+    seedIntent('intent-dec5', IntentStatus.CARD_ISSUED, makeCard('intent-dec5', null));
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/agent/decision/intent-dec5',
+      headers: { 'x-worker-key': 'test-worker-key' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.status).toBe(IntentStatus.APPROVED);
+    expect(body.card).toBeDefined();
+    expect(body.card.last4).toBe('4242');
+    expect(mockRevealCard).toHaveBeenCalledWith('intent-dec5');
+  });
+
+  it('returns APPROVED with card details when CHECKOUT_RUNNING and not yet revealed', async () => {
+    seedIntent('intent-dec6', IntentStatus.CHECKOUT_RUNNING, makeCard('intent-dec6', null));
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/agent/decision/intent-dec6',
+      headers: { 'x-worker-key': 'test-worker-key' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.status).toBe(IntentStatus.APPROVED);
+    expect(body.card).toBeDefined();
+    expect(mockRevealCard).toHaveBeenCalledWith('intent-dec6');
+  });
+
+  it('returns APPROVED without card when CHECKOUT_RUNNING and already revealed', async () => {
+    seedIntent('intent-dec7', IntentStatus.CHECKOUT_RUNNING, makeCard('intent-dec7', new Date()));
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/agent/decision/intent-dec7',
+      headers: { 'x-worker-key': 'test-worker-key' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.status).toBe(IntentStatus.APPROVED);
+    expect(body.card).toBeUndefined();
+    expect(mockRevealCard).not.toHaveBeenCalled();
+  });
+
+  it('returns APPROVED without card when revealCard throws CardAlreadyRevealedError', async () => {
+    seedIntent('intent-dec8', IntentStatus.CARD_ISSUED, makeCard('intent-dec8', null));
+    const { CardAlreadyRevealedError } = await import('@/contracts');
+    mockRevealCard.mockRejectedValueOnce(new CardAlreadyRevealedError('intent-dec8'));
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/agent/decision/intent-dec8',
+      headers: { 'x-worker-key': 'test-worker-key' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.status).toBe(IntentStatus.APPROVED);
+    expect(body.card).toBeUndefined();
+  });
+
+  it('returns AWAITING_APPROVAL for APPROVED status (brief transition state)', async () => {
+    seedIntent('intent-dec9', IntentStatus.APPROVED);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/agent/decision/intent-dec9',
+      headers: { 'x-worker-key': 'test-worker-key' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).status).toBe(IntentStatus.AWAITING_APPROVAL);
+  });
+
+  it('returns APPROVED without card when DONE and card already revealed', async () => {
+    seedIntent('intent-dec10', IntentStatus.DONE, makeCard('intent-dec10', new Date()));
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/agent/decision/intent-dec10',
+      headers: { 'x-worker-key': 'test-worker-key' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.status).toBe(IntentStatus.APPROVED);
+    expect(body.card).toBeUndefined();
+    expect(mockRevealCard).not.toHaveBeenCalled();
   });
 });
