@@ -101,6 +101,7 @@ const dbUsers: Record<string, any> = {
 const dbIntents: Record<string, any> = {};
 const dbVirtualCards: Record<string, any> = {}; // keyed by intentId
 const dbIdempotency: Record<string, any> = {};
+const dbPairingCodes: Record<string, any> = {}; // keyed by agentId
 
 jest.mock('@/db/client', () => ({
   prisma: {
@@ -131,6 +132,26 @@ jest.mock('@/db/client', () => ({
       }),
     },
     auditEvent: { create: jest.fn().mockResolvedValue({}) },
+    pairingCode: {
+      findUnique: jest.fn(({ where }: any) => {
+        if (where.agentId) return Promise.resolve(dbPairingCodes[where.agentId] ?? null);
+        // lookup by code
+        const found = Object.values(dbPairingCodes).find((r: any) => r.code === where.code);
+        return Promise.resolve(found ?? null);
+      }),
+      create: jest.fn(({ data }: any) => {
+        const record = { id: `pc-${Date.now()}`, ...data, createdAt: new Date() };
+        dbPairingCodes[record.agentId] = record;
+        return Promise.resolve(record);
+      }),
+      update: jest.fn(({ where, data }: any) => {
+        if (dbPairingCodes[where.agentId]) {
+          dbPairingCodes[where.agentId] = { ...dbPairingCodes[where.agentId], ...data };
+          return Promise.resolve(dbPairingCodes[where.agentId]);
+        }
+        return Promise.resolve(null);
+      }),
+    },
   },
 }));
 
@@ -157,6 +178,7 @@ beforeEach(() => {
   Object.keys(dbIntents).forEach((k) => delete dbIntents[k]);
   Object.keys(dbVirtualCards).forEach((k) => delete dbVirtualCards[k]);
   Object.keys(dbIdempotency).forEach((k) => delete dbIdempotency[k]);
+  Object.keys(dbPairingCodes).forEach((k) => delete dbPairingCodes[k]);
 });
 
 // ─── POST /v1/intents ─────────────────────────────────────────────────────────
@@ -720,5 +742,143 @@ describe('GET /v1/agent/decision/:intentId wiring', () => {
     expect(body.status).toBe(IntentStatus.APPROVED);
     expect(body.card).toBeUndefined();
     expect(mockRevealCard).not.toHaveBeenCalled();
+  });
+});
+
+// ─── POST /v1/agent/register ──────────────────────────────────────────────────
+
+describe('POST /v1/agent/register wiring', () => {
+  it('returns 401 without X-Worker-Key', async () => {
+    const res = await app.inject({ method: 'POST', url: '/v1/agent/register', payload: {} });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('creates a new agentId and pairingCode on first registration', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/agent/register',
+      headers: { 'x-worker-key': 'test-worker-key' },
+      payload: {},
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.agentId).toMatch(/^ag_/);
+    expect(body.pairingCode).toMatch(/^[A-Z0-9]{8}$/);
+    expect(body.expiresAt).toBeDefined();
+  });
+
+  it('returns 404 when renewing with unknown agentId', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/agent/register',
+      headers: { 'x-worker-key': 'test-worker-key' },
+      payload: { agentId: 'ag_nonexistent' },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('returns 409 when renewing an already-claimed agent', async () => {
+    dbPairingCodes['ag_claimed'] = {
+      id: 'pc-1', agentId: 'ag_claimed', code: 'AAAABBBB',
+      claimedByUserId: 'user-existing',
+      expiresAt: new Date(Date.now() + 60_000),
+      createdAt: new Date(),
+    };
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/agent/register',
+      headers: { 'x-worker-key': 'test-worker-key' },
+      payload: { agentId: 'ag_claimed' },
+    });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('renews code for unclaimed agent', async () => {
+    dbPairingCodes['ag_renew'] = {
+      id: 'pc-2', agentId: 'ag_renew', code: 'OLDCOD12',
+      claimedByUserId: null,
+      expiresAt: new Date(Date.now() + 60_000),
+      createdAt: new Date(),
+    };
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/agent/register',
+      headers: { 'x-worker-key': 'test-worker-key' },
+      payload: { agentId: 'ag_renew' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.agentId).toBe('ag_renew');
+    expect(body.pairingCode).toMatch(/^[A-Z0-9]{8}$/);
+  });
+});
+
+// ─── GET /v1/agent/user ───────────────────────────────────────────────────────
+
+describe('GET /v1/agent/user wiring', () => {
+  it('returns 401 without X-Worker-Key', async () => {
+    const res = await app.inject({ method: 'GET', url: '/v1/agent/user' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('returns 400 when X-Agent-Id header is missing', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/agent/user',
+      headers: { 'x-worker-key': 'test-worker-key' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error).toContain('X-Agent-Id');
+  });
+
+  it('returns 404 when agentId is unknown', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/agent/user',
+      headers: { 'x-worker-key': 'test-worker-key', 'x-agent-id': 'ag_unknown' },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('returns unclaimed status when code not yet used', async () => {
+    dbPairingCodes['ag_pending'] = {
+      id: 'pc-3', agentId: 'ag_pending', code: 'PEND1234',
+      claimedByUserId: null,
+      expiresAt: new Date(Date.now() + 60_000),
+      createdAt: new Date(),
+    };
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/agent/user',
+      headers: { 'x-worker-key': 'test-worker-key', 'x-agent-id': 'ag_pending' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).status).toBe('unclaimed');
+  });
+
+  it('returns claimed status with userId after user signs up', async () => {
+    dbPairingCodes['ag_done'] = {
+      id: 'pc-4', agentId: 'ag_done', code: 'DONE1234',
+      claimedByUserId: 'user-signup-1',
+      expiresAt: new Date(Date.now() + 60_000),
+      createdAt: new Date(),
+    };
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/agent/user',
+      headers: { 'x-worker-key': 'test-worker-key', 'x-agent-id': 'ag_done' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.status).toBe('claimed');
+    expect(body.userId).toBe('user-signup-1');
   });
 });
