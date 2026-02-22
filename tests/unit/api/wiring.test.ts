@@ -657,8 +657,8 @@ describe('GET /v1/agent/decision/:intentId wiring', () => {
     expect(mockRevealCard).not.toHaveBeenCalled();
   });
 
-  it('returns APPROVED with card details when CARD_ISSUED and not yet revealed', async () => {
-    seedIntent('intent-dec5', IntentStatus.CARD_ISSUED, makeCard('intent-dec5', null));
+  it('returns APPROVED with checkout params when CARD_ISSUED', async () => {
+    seedIntent('intent-dec5', IntentStatus.CARD_ISSUED);
 
     const res = await app.inject({
       method: 'GET',
@@ -669,13 +669,15 @@ describe('GET /v1/agent/decision/:intentId wiring', () => {
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
     expect(body.status).toBe(IntentStatus.APPROVED);
-    expect(body.card).toBeDefined();
-    expect(body.card.last4).toBe('4242');
-    expect(mockRevealCard).toHaveBeenCalledWith('intent-dec5');
+    expect(body.checkout).toBeDefined();
+    expect(body.checkout.intentId).toBe('intent-dec5');
+    expect(body.checkout.amount).toBe(10000); // falls back to maxBudget
+    expect(body.checkout.currency).toBe('gbp');
+    expect(mockRevealCard).not.toHaveBeenCalled();
   });
 
-  it('returns APPROVED with card details when CHECKOUT_RUNNING and not yet revealed', async () => {
-    seedIntent('intent-dec6', IntentStatus.CHECKOUT_RUNNING, makeCard('intent-dec6', null));
+  it('returns APPROVED with checkout params when CHECKOUT_RUNNING', async () => {
+    seedIntent('intent-dec6', IntentStatus.CHECKOUT_RUNNING);
 
     const res = await app.inject({
       method: 'GET',
@@ -686,12 +688,14 @@ describe('GET /v1/agent/decision/:intentId wiring', () => {
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
     expect(body.status).toBe(IntentStatus.APPROVED);
-    expect(body.card).toBeDefined();
-    expect(mockRevealCard).toHaveBeenCalledWith('intent-dec6');
+    expect(body.checkout).toBeDefined();
+    expect(body.checkout.intentId).toBe('intent-dec6');
+    expect(mockRevealCard).not.toHaveBeenCalled();
   });
 
-  it('returns APPROVED without card when CHECKOUT_RUNNING and already revealed', async () => {
-    seedIntent('intent-dec7', IntentStatus.CHECKOUT_RUNNING, makeCard('intent-dec7', new Date()));
+  it('returns quote price when metadata has quote', async () => {
+    seedIntent('intent-dec7', IntentStatus.CARD_ISSUED);
+    dbIntents['intent-dec7'].metadata = { quote: { price: 3499 } };
 
     const res = await app.inject({
       method: 'GET',
@@ -702,14 +706,11 @@ describe('GET /v1/agent/decision/:intentId wiring', () => {
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
     expect(body.status).toBe(IntentStatus.APPROVED);
-    expect(body.card).toBeUndefined();
-    expect(mockRevealCard).not.toHaveBeenCalled();
+    expect(body.checkout.amount).toBe(3499); // quote price takes priority over maxBudget
   });
 
-  it('returns APPROVED without card when revealCard throws CardAlreadyRevealedError', async () => {
-    seedIntent('intent-dec8', IntentStatus.CARD_ISSUED, makeCard('intent-dec8', null));
-    const { CardAlreadyRevealedError } = await import('@/contracts');
-    mockRevealCard.mockRejectedValueOnce(new CardAlreadyRevealedError('intent-dec8'));
+  it('returns APPROVED with checkout params when DONE', async () => {
+    seedIntent('intent-dec8', IntentStatus.DONE);
 
     const res = await app.inject({
       method: 'GET',
@@ -720,7 +721,8 @@ describe('GET /v1/agent/decision/:intentId wiring', () => {
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
     expect(body.status).toBe(IntentStatus.APPROVED);
-    expect(body.card).toBeUndefined();
+    expect(body.checkout).toBeDefined();
+    expect(mockRevealCard).not.toHaveBeenCalled();
   });
 
   it('returns AWAITING_APPROVAL for APPROVED status (brief transition state)', async () => {
@@ -736,8 +738,8 @@ describe('GET /v1/agent/decision/:intentId wiring', () => {
     expect(JSON.parse(res.body).status).toBe(IntentStatus.AWAITING_APPROVAL);
   });
 
-  it('returns APPROVED without card when DONE and card already revealed', async () => {
-    seedIntent('intent-dec10', IntentStatus.DONE, makeCard('intent-dec10', new Date()));
+  it('returns checkout params and no card field when DONE', async () => {
+    seedIntent('intent-dec10', IntentStatus.DONE);
 
     const res = await app.inject({
       method: 'GET',
@@ -749,6 +751,7 @@ describe('GET /v1/agent/decision/:intentId wiring', () => {
     const body = JSON.parse(res.body);
     expect(body.status).toBe(IntentStatus.APPROVED);
     expect(body.card).toBeUndefined();
+    expect(body.checkout).toBeDefined();
     expect(mockRevealCard).not.toHaveBeenCalled();
   });
 });
@@ -910,10 +913,7 @@ describe('POST /v1/checkout/simulate wiring', () => {
       url: '/v1/checkout/simulate',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        cardNumber: '4242424242424242',
-        cvc: '123',
-        expMonth: 12,
-        expYear: 2027,
+        intentId: 'intent-wiring-test',
         amount: 5000,
         currency: 'eur',
         merchantName: 'Test Merchant',
@@ -922,7 +922,7 @@ describe('POST /v1/checkout/simulate wiring', () => {
 
     expect(res.statusCode).toBe(200);
     expect(mockRunSimulatedCheckout).toHaveBeenCalledWith(
-      expect.objectContaining({ cardNumber: '4242424242424242', amount: 5000, currency: 'eur' }),
+      expect.objectContaining({ intentId: 'intent-wiring-test', amount: 5000, currency: 'eur' }),
     );
     const body = JSON.parse(res.body);
     expect(body.success).toBe(true);

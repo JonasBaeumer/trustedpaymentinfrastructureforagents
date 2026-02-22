@@ -46,10 +46,7 @@ afterAll(async () => {
 beforeEach(() => jest.clearAllMocks());
 
 const validBody = {
-  cardNumber: '4242424242424242',
-  cvc: '123',
-  expMonth: 12,
-  expYear: 2027,
+  intentId: 'intent-abc123',
   amount: 5000,
   currency: 'eur',
   merchantName: 'Amazon DE',
@@ -58,8 +55,8 @@ const validBody = {
 // ─── Validation errors (400) ──────────────────────────────────────────────────
 
 describe('POST /v1/checkout/simulate — 400 validation', () => {
-  it('returns 400 when cardNumber is missing', async () => {
-    const { cardNumber: _cn, ...body } = validBody;
+  it('returns 400 when intentId is missing', async () => {
+    const { intentId: _id, ...body } = validBody;
     const res = await app.inject({
       method: 'POST',
       url: '/v1/checkout/simulate',
@@ -69,32 +66,12 @@ describe('POST /v1/checkout/simulate — 400 validation', () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it('returns 400 when cvc has invalid format (letters)', async () => {
+  it('returns 400 when intentId is an empty string', async () => {
     const res = await app.inject({
       method: 'POST',
       url: '/v1/checkout/simulate',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ...validBody, cvc: 'abc' }),
-    });
-    expect(res.statusCode).toBe(400);
-  });
-
-  it('returns 400 when cvc is too short (2 digits)', async () => {
-    const res = await app.inject({
-      method: 'POST',
-      url: '/v1/checkout/simulate',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ...validBody, cvc: '12' }),
-    });
-    expect(res.statusCode).toBe(400);
-  });
-
-  it('returns 400 when expYear is in the past', async () => {
-    const res = await app.inject({
-      method: 'POST',
-      url: '/v1/checkout/simulate',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ...validBody, expYear: 2020 }),
+      body: JSON.stringify({ ...validBody, intentId: '' }),
     });
     expect(res.statusCode).toBe(400);
   });
@@ -110,12 +87,32 @@ describe('POST /v1/checkout/simulate — 400 validation', () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it('returns 400 when cardNumber is too short (12 digits)', async () => {
+  it('returns 400 when amount is zero', async () => {
     const res = await app.inject({
       method: 'POST',
       url: '/v1/checkout/simulate',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ...validBody, cardNumber: '424242424242' }),
+      body: JSON.stringify({ ...validBody, amount: 0 }),
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('returns 400 when amount exceeds maximum (1 000 000)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/checkout/simulate',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...validBody, amount: 1_000_001 }),
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('returns 400 when currency is the wrong length', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/checkout/simulate',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...validBody, currency: 'eu' }),
     });
     expect(res.statusCode).toBe(400);
   });
@@ -127,7 +124,7 @@ describe('POST /v1/checkout/simulate — 200 success', () => {
   it('returns 200 with chargeId, amount, currency on success', async () => {
     mockRunSimulatedCheckout.mockResolvedValue({
       success: true,
-      chargeId: 'pi_test123',
+      chargeId: 'iauth_test123',
       amount: 5000,
       currency: 'eur',
     });
@@ -142,7 +139,7 @@ describe('POST /v1/checkout/simulate — 200 success', () => {
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
     expect(body.success).toBe(true);
-    expect(body.chargeId).toBe('pi_test123');
+    expect(body.chargeId).toBe('iauth_test123');
     expect(body.amount).toBe(5000);
     expect(body.currency).toBe('eur');
   });
@@ -150,7 +147,7 @@ describe('POST /v1/checkout/simulate — 200 success', () => {
   it('defaults currency to eur when omitted', async () => {
     mockRunSimulatedCheckout.mockResolvedValue({
       success: true,
-      chargeId: 'pi_eur',
+      chargeId: 'iauth_eur',
       amount: 1000,
       currency: 'eur',
     });

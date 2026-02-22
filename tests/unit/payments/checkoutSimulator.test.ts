@@ -1,179 +1,168 @@
-import Stripe from 'stripe';
-
 // Mock Stripe client
+const mockAuthCreate = jest.fn();
+const mockAuthCapture = jest.fn();
 const mockStripe = {
-  paymentMethods: { create: jest.fn() },
-  paymentIntents: { create: jest.fn() },
+  testHelpers: {
+    issuing: {
+      authorizations: {
+        create: mockAuthCreate,
+        capture: mockAuthCapture,
+      },
+    },
+  },
 };
 jest.mock('@/payments/stripeClient', () => ({ getStripeClient: () => mockStripe }));
 
-import { runSimulatedCheckout } from '@/payments/checkoutSimulator';
+// Mock Prisma
+const mockFindUniqueCard = jest.fn();
+jest.mock('@/db/client', () => ({
+  prisma: {
+    virtualCard: {
+      findUnique: mockFindUniqueCard,
+    },
+  },
+}));
 
+import { runSimulatedCheckout } from '@/payments/checkoutSimulator';
+import { IntentNotFoundError } from '@/contracts';
+
+const CARD_ID = 'ic_test123';
 const validParams = {
-  cardNumber: '4242424242424242',
-  cvc: '123',
-  expMonth: 12,
-  expYear: 2027,
+  intentId: 'intent-abc',
   amount: 5000,
   currency: 'eur',
   merchantName: 'Amazon DE',
 };
 
-beforeEach(() => jest.clearAllMocks());
+beforeEach(() => {
+  jest.clearAllMocks();
+  mockFindUniqueCard.mockResolvedValue({
+    intentId: validParams.intentId,
+    stripeCardId: CARD_ID,
+    last4: '4242',
+  });
+});
 
 describe('runSimulatedCheckout — success path', () => {
   it('returns success=true with chargeId, amount, currency', async () => {
-    mockStripe.paymentMethods.create.mockResolvedValue({ id: 'pm_test123' });
-    mockStripe.paymentIntents.create.mockResolvedValue({ id: 'pi_test456', status: 'succeeded' });
+    mockAuthCreate.mockResolvedValue({ id: 'iauth_test456', approved: true, request_history: [] });
+    mockAuthCapture.mockResolvedValue({ id: 'iauth_test456', status: 'closed' });
 
     const result = await runSimulatedCheckout(validParams);
 
     expect(result.success).toBe(true);
-    expect(result.chargeId).toBe('pi_test456');
+    expect(result.chargeId).toBe('iauth_test456');
     expect(result.amount).toBe(5000);
     expect(result.currency).toBe('eur');
   });
 
-  it('creates PaymentMethod with the provided card credentials', async () => {
-    mockStripe.paymentMethods.create.mockResolvedValue({ id: 'pm_creds' });
-    mockStripe.paymentIntents.create.mockResolvedValue({ id: 'pi_creds', status: 'succeeded' });
+  it('looks up stripeCardId from DB and passes it to the authorization', async () => {
+    mockAuthCreate.mockResolvedValue({ id: 'iauth_lookup', approved: true, request_history: [] });
+    mockAuthCapture.mockResolvedValue({ id: 'iauth_lookup', status: 'closed' });
 
     await runSimulatedCheckout(validParams);
 
-    expect(mockStripe.paymentMethods.create).toHaveBeenCalledWith({
-      type: 'card',
-      card: {
-        number: '4242424242424242',
-        exp_month: 12,
-        exp_year: 2027,
-        cvc: '123',
-      },
-    });
+    expect(mockFindUniqueCard).toHaveBeenCalledWith({ where: { intentId: validParams.intentId } });
+    expect(mockAuthCreate).toHaveBeenCalledWith(expect.objectContaining({ card: CARD_ID }));
   });
 
-  it('confirms the PaymentIntent with the created payment method', async () => {
-    mockStripe.paymentMethods.create.mockResolvedValue({ id: 'pm_confirm' });
-    mockStripe.paymentIntents.create.mockResolvedValue({ id: 'pi_confirm', status: 'succeeded' });
-
-    await runSimulatedCheckout(validParams);
-
-    expect(mockStripe.paymentIntents.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        amount: 5000,
-        currency: 'eur',
-        payment_method: 'pm_confirm',
-        confirm: true,
-      }),
-    );
-  });
-
-  it('forwards the amount to the PaymentIntent exactly', async () => {
-    mockStripe.paymentMethods.create.mockResolvedValue({ id: 'pm_amt' });
-    mockStripe.paymentIntents.create.mockResolvedValue({ id: 'pi_amt', status: 'succeeded' });
+  it('creates authorization with the provided amount and currency', async () => {
+    mockAuthCreate.mockResolvedValue({ id: 'iauth_amt', approved: true, request_history: [] });
+    mockAuthCapture.mockResolvedValue({ id: 'iauth_amt', status: 'closed' });
 
     await runSimulatedCheckout({ ...validParams, amount: 99999 });
 
-    expect(mockStripe.paymentIntents.create).toHaveBeenCalledWith(
-      expect.objectContaining({ amount: 99999 }),
+    expect(mockAuthCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 99999, currency: 'eur' }),
     );
   });
 
-  it('defaults currency to eur when not specified (schema default)', async () => {
-    mockStripe.paymentMethods.create.mockResolvedValue({ id: 'pm_eur' });
-    mockStripe.paymentIntents.create.mockResolvedValue({ id: 'pi_eur', status: 'succeeded' });
+  it('captures the authorization after it is approved', async () => {
+    mockAuthCreate.mockResolvedValue({ id: 'iauth_cap', approved: true, request_history: [] });
+    mockAuthCapture.mockResolvedValue({ id: 'iauth_cap', status: 'closed' });
 
-    // The schema default is applied upstream; here we test the service honours it
+    await runSimulatedCheckout(validParams);
+
+    expect(mockAuthCapture).toHaveBeenCalledWith('iauth_cap');
+  });
+
+  it('passes merchantName to authorization merchant_data', async () => {
+    mockAuthCreate.mockResolvedValue({ id: 'iauth_merchant', approved: true, request_history: [] });
+    mockAuthCapture.mockResolvedValue({ id: 'iauth_merchant', status: 'closed' });
+
+    await runSimulatedCheckout({ ...validParams, merchantName: 'Test Merchant' });
+
+    expect(mockAuthCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ merchant_data: { name: 'Test Merchant' } }),
+    );
+  });
+
+  it('defaults currency to eur (schema default applied upstream)', async () => {
+    mockAuthCreate.mockResolvedValue({ id: 'iauth_eur', approved: true, request_history: [] });
+    mockAuthCapture.mockResolvedValue({ id: 'iauth_eur', status: 'closed' });
+
     const result = await runSimulatedCheckout({ ...validParams, currency: 'eur' });
 
-    expect(mockStripe.paymentIntents.create).toHaveBeenCalledWith(
-      expect.objectContaining({ currency: 'eur' }),
-    );
+    expect(mockAuthCreate).toHaveBeenCalledWith(expect.objectContaining({ currency: 'eur' }));
     expect(result.currency).toBe('eur');
   });
 });
 
 describe('runSimulatedCheckout — card declined', () => {
-  function makeCardError(declineCode: string, message: string) {
-    const err = new Stripe.errors.StripeCardError({
-      type: 'card_error',
-      message,
-      code: 'card_declined',
-      decline_code: declineCode,
-      param: '',
-      doc_url: '',
-      payment_intent: undefined,
-      payment_method: undefined,
-      payment_method_type: undefined,
-      setup_intent: undefined,
-      source: undefined,
-      charge: undefined,
-      headers: {},
-      requestId: 'req_test',
-      statusCode: 402,
-      rawType: 'card_error',
-      raw: {},
-    } as any);
-    return err;
-  }
+  it('returns success=false when authorization is not approved', async () => {
+    mockAuthCreate.mockResolvedValue({
+      id: 'iauth_declined',
+      approved: false,
+      request_history: [{ reason: 'spending_controls' }],
+    });
 
-  it('returns success=false with declineCode when PaymentIntent throws card_error', async () => {
-    mockStripe.paymentMethods.create.mockResolvedValue({ id: 'pm_decline' });
-    mockStripe.paymentIntents.create.mockRejectedValue(
-      makeCardError('card_declined', 'Your card was declined.'),
-    );
+    const result = await runSimulatedCheckout(validParams);
+
+    expect(result.success).toBe(false);
+    expect(result.declineCode).toBe('spending_controls');
+    expect(result.message).toBe('Card declined');
+    expect(mockAuthCapture).not.toHaveBeenCalled();
+  });
+
+  it('uses card_declined as fallback when request_history is empty', async () => {
+    mockAuthCreate.mockResolvedValue({
+      id: 'iauth_fallback',
+      approved: false,
+      request_history: [],
+    });
 
     const result = await runSimulatedCheckout(validParams);
 
     expect(result.success).toBe(false);
     expect(result.declineCode).toBe('card_declined');
-    expect(result.message).toBe('Your card was declined.');
   });
 
-  it('returns success=false on spending_controls_violation', async () => {
-    mockStripe.paymentMethods.create.mockResolvedValue({ id: 'pm_limit' });
-    mockStripe.paymentIntents.create.mockRejectedValue(
-      makeCardError('spending_controls_violation', 'Spending limit exceeded.'),
-    );
+  it('does not call capture when authorization is declined', async () => {
+    mockAuthCreate.mockResolvedValue({ id: 'iauth_no_cap', approved: false, request_history: [] });
 
-    const result = await runSimulatedCheckout(validParams);
+    await runSimulatedCheckout(validParams);
 
-    expect(result.success).toBe(false);
-    expect(result.declineCode).toBe('spending_controls_violation');
-  });
-
-  it('returns success=false when PaymentMethod create throws card_error', async () => {
-    mockStripe.paymentMethods.create.mockRejectedValue(
-      makeCardError('invalid_number', 'Your card number is invalid.'),
-    );
-
-    const result = await runSimulatedCheckout(validParams);
-
-    expect(result.success).toBe(false);
-    expect(result.declineCode).toBe('invalid_number');
-    expect(mockStripe.paymentIntents.create).not.toHaveBeenCalled();
+    expect(mockAuthCapture).not.toHaveBeenCalled();
   });
 });
 
-describe('runSimulatedCheckout — unexpected errors', () => {
-  it('rethrows non-card Stripe errors (api_error)', async () => {
-    mockStripe.paymentMethods.create.mockResolvedValue({ id: 'pm_apierr' });
-    const apiErr = new Stripe.errors.StripeAPIError({
-      type: 'api_error',
-      message: 'An error occurred with our connection to Stripe.',
-      headers: {},
-      requestId: 'req_api',
-      statusCode: 500,
-      rawType: 'api_error',
-      raw: {},
-    } as any);
-    mockStripe.paymentIntents.create.mockRejectedValue(apiErr);
+describe('runSimulatedCheckout — error cases', () => {
+  it('throws IntentNotFoundError when virtualCard is not found', async () => {
+    mockFindUniqueCard.mockResolvedValue(null);
 
-    await expect(runSimulatedCheckout(validParams)).rejects.toThrow(Stripe.errors.StripeAPIError);
+    await expect(runSimulatedCheckout(validParams)).rejects.toThrow(IntentNotFoundError);
   });
 
-  it('rethrows generic non-Stripe errors', async () => {
-    mockStripe.paymentMethods.create.mockRejectedValue(new Error('Network timeout'));
+  it('rethrows Stripe errors from authorization create', async () => {
+    mockAuthCreate.mockRejectedValue(new Error('Stripe connection error'));
 
-    await expect(runSimulatedCheckout(validParams)).rejects.toThrow('Network timeout');
+    await expect(runSimulatedCheckout(validParams)).rejects.toThrow('Stripe connection error');
+  });
+
+  it('rethrows Stripe errors from authorization capture', async () => {
+    mockAuthCreate.mockResolvedValue({ id: 'iauth_capture_err', approved: true, request_history: [] });
+    mockAuthCapture.mockRejectedValue(new Error('Capture failed'));
+
+    await expect(runSimulatedCheckout(validParams)).rejects.toThrow('Capture failed');
   });
 });

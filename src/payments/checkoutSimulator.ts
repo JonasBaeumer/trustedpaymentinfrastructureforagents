@@ -1,5 +1,7 @@
 import Stripe from 'stripe';
 import { getStripeClient } from './stripeClient';
+import { prisma } from '@/db/client';
+import { IntentNotFoundError } from '@/contracts';
 
 export interface SimulatedCheckoutResult {
   success: boolean;
@@ -11,80 +13,62 @@ export interface SimulatedCheckoutResult {
 }
 
 export async function runSimulatedCheckout(params: {
-  cardNumber: string;
-  cvc: string;
-  expMonth: number;
-  expYear: number;
+  intentId: string;
   amount: number;
   currency: string;
   merchantName: string;
 }): Promise<SimulatedCheckoutResult> {
   const stripe = getStripeClient();
-  const { cardNumber, cvc, expMonth, expYear, amount, currency, merchantName } = params;
+  const { intentId, amount, currency, merchantName } = params;
 
-  let paymentMethod: Stripe.PaymentMethod;
+  // Look up stripeCardId from DB — no raw card data needed
+  const virtualCard = await prisma.virtualCard.findUnique({ where: { intentId } });
+  if (!virtualCard) throw new IntentNotFoundError(intentId);
+
+  let auth: Stripe.Issuing.Authorization;
   try {
-    paymentMethod = await stripe.paymentMethods.create({
-      type: 'card',
-      card: {
-        number: cardNumber,
-        exp_month: expMonth,
-        exp_year: expYear,
-        cvc,
-      },
+    auth = await stripe.testHelpers.issuing.authorizations.create({
+      card: virtualCard.stripeCardId,
+      amount,
+      currency: currency.toLowerCase(),
+      merchant_data: { name: merchantName },
     });
   } catch (err) {
-    if (err instanceof Stripe.errors.StripeCardError) {
-      return {
-        success: false,
-        chargeId: '',
-        amount,
-        currency,
-        declineCode: err.decline_code ?? err.code ?? 'card_declined',
-        message: err.message,
-      };
-    }
     if (err instanceof Stripe.errors.StripeError) {
       console.error(JSON.stringify({
         level: 'error',
-        message: 'checkoutSimulator: paymentMethod create failed',
+        message: 'checkoutSimulator: authorization create failed',
         type: err.type,
         code: err.code,
         errMessage: err.message,
+        intentId,
       }));
     }
     throw err;
   }
 
-  let paymentIntent: Stripe.PaymentIntent;
-  try {
-    paymentIntent = await stripe.paymentIntents.create({
+  if (!auth.approved) {
+    return {
+      success: false,
+      chargeId: auth.id,
       amount,
-      currency: currency.toLowerCase(),
-      payment_method: paymentMethod.id,
-      confirm: true,
-      error_on_requires_action: true,
-      return_url: 'https://example.com/return',
-      description: merchantName,
-    });
+      currency,
+      declineCode: auth.request_history?.[0]?.reason ?? 'card_declined',
+      message: 'Card declined',
+    };
+  }
+
+  try {
+    await stripe.testHelpers.issuing.authorizations.capture(auth.id);
   } catch (err) {
-    if (err instanceof Stripe.errors.StripeCardError) {
-      return {
-        success: false,
-        chargeId: '',
-        amount,
-        currency,
-        declineCode: err.decline_code ?? err.code ?? 'card_declined',
-        message: err.message,
-      };
-    }
     if (err instanceof Stripe.errors.StripeError) {
       console.error(JSON.stringify({
         level: 'error',
-        message: 'checkoutSimulator: paymentIntent create failed',
+        message: 'checkoutSimulator: authorization capture failed',
         type: err.type,
         code: err.code,
         errMessage: err.message,
+        intentId,
       }));
     }
     throw err;
@@ -92,7 +76,7 @@ export async function runSimulatedCheckout(params: {
 
   return {
     success: true,
-    chargeId: paymentIntent.id,
+    chargeId: auth.id,
     amount,
     currency,
   };

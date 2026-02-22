@@ -112,18 +112,15 @@ export async function agentRoutes(fastify: FastifyInstance): Promise<void> {
       case IntentStatus.CARD_ISSUED:
       case IntentStatus.CHECKOUT_RUNNING:
       case IntentStatus.DONE: {
-        if (!intent.virtualCard || intent.virtualCard.revealedAt !== null) {
-          return reply.send({ intentId, status: IntentStatus.APPROVED });
-        }
-        try {
-          const reveal = await revealCard(intentId);
-          return reply.send({ intentId, status: IntentStatus.APPROVED, card: reveal });
-        } catch (err: any) {
-          if (err.name === 'CardAlreadyRevealedError') {
-            return reply.send({ intentId, status: IntentStatus.APPROVED });
-          }
-          throw err;
-        }
+        // Return checkout params directly — OpenClaw passes these to POST /v1/checkout/simulate
+        // Quote price takes priority over maxBudget when available
+        const meta = intent.metadata as any;
+        const amount = meta?.quote?.price ?? intent.maxBudget;
+        return reply.send({
+          intentId,
+          status: IntentStatus.APPROVED,
+          checkout: { intentId, amount, currency: intent.currency },
+        });
       }
 
       case IntentStatus.APPROVED:
