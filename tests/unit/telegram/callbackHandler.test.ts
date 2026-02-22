@@ -1,0 +1,249 @@
+jest.mock('@/config/env', () => ({
+  env: {
+    TELEGRAM_BOT_TOKEN: 'test-bot-token',
+    TELEGRAM_WEBHOOK_SECRET: 'test-secret',
+    DATABASE_URL: 'postgresql://test',
+    REDIS_URL: 'redis://localhost:6379',
+    WORKER_API_KEY: 'test-key',
+    PORT: 3000,
+    NODE_ENV: 'test',
+    STRIPE_SECRET_KEY: 'sk_test_placeholder',
+    STRIPE_WEBHOOK_SECRET: 'whsec_placeholder',
+    TELEGRAM_TEST_CHAT_ID: '',
+  },
+}));
+
+const mockAnswerCallbackQuery = jest.fn().mockResolvedValue(undefined);
+const mockEditMessageText = jest.fn().mockResolvedValue(undefined);
+const mockGetTelegramBot = jest.fn(() => ({
+  api: {
+    answerCallbackQuery: mockAnswerCallbackQuery,
+    editMessageText: mockEditMessageText,
+  },
+}));
+
+jest.mock('@/telegram/telegramClient', () => ({
+  getTelegramBot: mockGetTelegramBot,
+}));
+
+const mockRecordDecision = jest.fn().mockResolvedValue({});
+jest.mock('@/approval/approvalService', () => ({
+  recordDecision: mockRecordDecision,
+}));
+
+const mockReserveForIntent = jest.fn().mockResolvedValue({});
+const mockReturnIntent = jest.fn().mockResolvedValue(undefined);
+jest.mock('@/ledger/potService', () => ({
+  reserveForIntent: mockReserveForIntent,
+  returnIntent: mockReturnIntent,
+}));
+
+const mockIssueVirtualCard = jest.fn().mockResolvedValue({ stripeCardId: 'ic_test', last4: '4242' });
+jest.mock('@/payments/cardService', () => ({
+  issueVirtualCard: mockIssueVirtualCard,
+}));
+
+const mockMarkCardIssued = jest.fn().mockResolvedValue({});
+const mockStartCheckout = jest.fn().mockResolvedValue({});
+jest.mock('@/orchestrator/intentService', () => ({
+  markCardIssued: mockMarkCardIssued,
+  startCheckout: mockStartCheckout,
+}));
+
+const mockEnqueueCheckout = jest.fn().mockResolvedValue(undefined);
+jest.mock('@/queue/producers', () => ({
+  enqueueCheckout: mockEnqueueCheckout,
+}));
+
+const dbIntents: Record<string, any> = {};
+const dbIdempotency: Record<string, any> = {};
+
+jest.mock('@/db/client', () => ({
+  prisma: {
+    purchaseIntent: {
+      findUnique: jest.fn(({ where }: any) => Promise.resolve(dbIntents[where.id] ?? null)),
+    },
+    idempotencyRecord: {
+      findUnique: jest.fn(({ where }: any) => Promise.resolve(dbIdempotency[where.key] ?? null)),
+      upsert: jest.fn(({ where, create }: any) => {
+        if (!dbIdempotency[where.key]) dbIdempotency[where.key] = create;
+        return Promise.resolve(dbIdempotency[where.key]);
+      }),
+    },
+  },
+}));
+
+import { handleTelegramCallback } from '@/telegram/callbackHandler';
+import { IntentStatus, ApprovalDecisionType } from '@/contracts';
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  Object.keys(dbIntents).forEach((k) => delete dbIntents[k]);
+  Object.keys(dbIdempotency).forEach((k) => delete dbIdempotency[k]);
+
+  mockAnswerCallbackQuery.mockResolvedValue(undefined);
+  mockEditMessageText.mockResolvedValue(undefined);
+  mockIssueVirtualCard.mockResolvedValue({ stripeCardId: 'ic_test', last4: '4242' });
+});
+
+function makeUpdate(action: string, intentId: string, cbId = 'cb-1', fromId = 111): any {
+  return {
+    callback_query: {
+      id: cbId,
+      data: `${action}:${intentId}`,
+      from: { id: fromId },
+      message: { message_id: 10, chat: { id: 999 } },
+    },
+  };
+}
+
+function seedAwaitingIntent(id: string) {
+  dbIntents[id] = {
+    id,
+    userId: 'user-1',
+    status: IntentStatus.AWAITING_APPROVAL,
+    maxBudget: 10000,
+    currency: 'gbp',
+    metadata: { merchantName: 'Amazon UK', merchantUrl: 'https://amazon.co.uk', price: 9999 },
+    user: { id: 'user-1', mccAllowlist: [] },
+  };
+}
+
+// ─── Core behaviour ────────────────────────────────────────────────────────────
+
+describe('handleTelegramCallback — approve path', () => {
+  it('calls answerCallbackQuery first (before any DB work)', async () => {
+    seedAwaitingIntent('intent-cb1');
+    const callOrder: string[] = [];
+    mockAnswerCallbackQuery.mockImplementation(() => { callOrder.push('answer'); return Promise.resolve(); });
+    mockRecordDecision.mockImplementation(() => { callOrder.push('record'); return Promise.resolve({}); });
+
+    await handleTelegramCallback(makeUpdate('approve', 'intent-cb1', 'cb-cb1'));
+
+    expect(callOrder[0]).toBe('answer');
+    expect(callOrder[1]).toBe('record');
+  });
+
+  it('calls all 6 service functions in correct order', async () => {
+    seedAwaitingIntent('intent-cb2');
+    const order: string[] = [];
+    mockRecordDecision.mockImplementation(() => { order.push('recordDecision'); return Promise.resolve({}); });
+    mockReserveForIntent.mockImplementation(() => { order.push('reserveForIntent'); return Promise.resolve({}); });
+    mockIssueVirtualCard.mockImplementation(() => { order.push('issueVirtualCard'); return Promise.resolve({ stripeCardId: 'ic_t', last4: '4242' }); });
+    mockMarkCardIssued.mockImplementation(() => { order.push('markCardIssued'); return Promise.resolve({}); });
+    mockStartCheckout.mockImplementation(() => { order.push('startCheckout'); return Promise.resolve({}); });
+    mockEnqueueCheckout.mockImplementation(() => { order.push('enqueueCheckout'); return Promise.resolve(); });
+
+    await handleTelegramCallback(makeUpdate('approve', 'intent-cb2', 'cb-cb2'));
+
+    expect(order).toEqual([
+      'recordDecision',
+      'reserveForIntent',
+      'issueVirtualCard',
+      'markCardIssued',
+      'startCheckout',
+      'enqueueCheckout',
+    ]);
+  });
+
+  it('edits message to success text after approve', async () => {
+    seedAwaitingIntent('intent-cb3');
+
+    await handleTelegramCallback(makeUpdate('approve', 'intent-cb3', 'cb-cb3'));
+
+    expect(mockEditMessageText).toHaveBeenCalledWith(999, 10, '✅ Approved. Checkout is running.', expect.any(Object));
+  });
+});
+
+describe('handleTelegramCallback — reject path', () => {
+  it('only calls recordDecision(DENIED); no reserve/card/checkout', async () => {
+    seedAwaitingIntent('intent-rej1');
+
+    await handleTelegramCallback(makeUpdate('reject', 'intent-rej1', 'cb-rej1'));
+
+    expect(mockRecordDecision).toHaveBeenCalledWith('intent-rej1', ApprovalDecisionType.DENIED, expect.any(String), 'Rejected via Telegram');
+    expect(mockReserveForIntent).not.toHaveBeenCalled();
+    expect(mockIssueVirtualCard).not.toHaveBeenCalled();
+    expect(mockEnqueueCheckout).not.toHaveBeenCalled();
+  });
+
+  it('edits message to rejected text', async () => {
+    seedAwaitingIntent('intent-rej2');
+
+    await handleTelegramCallback(makeUpdate('reject', 'intent-rej2', 'cb-rej2'));
+
+    expect(mockEditMessageText).toHaveBeenCalledWith(999, 10, '❌ Rejected.', expect.any(Object));
+  });
+});
+
+describe('handleTelegramCallback — guard: not AWAITING_APPROVAL', () => {
+  it('does not call any service function when status is not AWAITING_APPROVAL', async () => {
+    dbIntents['intent-done'] = { ...dbIntents['intent-done'], id: 'intent-done', status: IntentStatus.DONE, userId: 'u', metadata: {}, user: {} };
+
+    await handleTelegramCallback(makeUpdate('approve', 'intent-done', 'cb-done'));
+
+    expect(mockRecordDecision).not.toHaveBeenCalled();
+    expect(mockReserveForIntent).not.toHaveBeenCalled();
+  });
+
+  it('edits message with current status when already processed', async () => {
+    dbIntents['intent-alr'] = { id: 'intent-alr', status: IntentStatus.CHECKOUT_RUNNING, userId: 'u', metadata: {}, user: {} };
+
+    await handleTelegramCallback(makeUpdate('approve', 'intent-alr', 'cb-alr'));
+
+    expect(mockEditMessageText).toHaveBeenCalledWith(
+      expect.anything(), expect.anything(),
+      expect.stringContaining('CHECKOUT_RUNNING'),
+      expect.any(Object),
+    );
+  });
+});
+
+describe('handleTelegramCallback — idempotency guard', () => {
+  it('does not reprocess if callbackQueryId already handled', async () => {
+    seedAwaitingIntent('intent-idem');
+    dbIdempotency['telegram_cb:cb-idem'] = { action: 'approve', intentId: 'intent-idem' };
+
+    await handleTelegramCallback(makeUpdate('approve', 'intent-idem', 'cb-idem'));
+
+    expect(mockRecordDecision).not.toHaveBeenCalled();
+  });
+});
+
+describe('handleTelegramCallback — issueVirtualCard failure compensation', () => {
+  it('calls returnIntent when issueVirtualCard throws', async () => {
+    seedAwaitingIntent('intent-fail');
+    mockIssueVirtualCard.mockRejectedValueOnce(new Error('Stripe down'));
+
+    await expect(handleTelegramCallback(makeUpdate('approve', 'intent-fail', 'cb-fail'))).rejects.toThrow('Stripe down');
+
+    expect(mockReturnIntent).toHaveBeenCalledWith('intent-fail');
+  });
+
+  it('edits message with error text when issueVirtualCard throws', async () => {
+    seedAwaitingIntent('intent-fail2');
+    mockIssueVirtualCard.mockRejectedValueOnce(new Error('Stripe down'));
+
+    await expect(handleTelegramCallback(makeUpdate('approve', 'intent-fail2', 'cb-fail2'))).rejects.toThrow();
+
+    expect(mockEditMessageText).toHaveBeenCalledWith(
+      expect.anything(), expect.anything(),
+      expect.stringContaining('⚠️'),
+      expect.any(Object),
+    );
+  });
+
+  it('saves idempotency record before processing so retries are blocked', async () => {
+    seedAwaitingIntent('intent-idem2');
+    mockIssueVirtualCard.mockRejectedValueOnce(new Error('Stripe down'));
+
+    await expect(handleTelegramCallback(makeUpdate('approve', 'intent-idem2', 'cb-idem2'))).rejects.toThrow();
+
+    // Re-run with same callbackQueryId — idempotency guard should block it
+    mockIssueVirtualCard.mockResolvedValue({ stripeCardId: 'ic_t', last4: '4242' });
+    jest.clearAllMocks();
+    // Restore the idempotency entry (upsert mock already saved it via the real dbIdempotency object)
+    await handleTelegramCallback(makeUpdate('approve', 'intent-idem2', 'cb-idem2'));
+    expect(mockRecordDecision).not.toHaveBeenCalled();
+  });
+});

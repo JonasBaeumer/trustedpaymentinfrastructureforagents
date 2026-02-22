@@ -1,0 +1,69 @@
+import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import { prisma } from '@/db/client';
+import { idempotencyMiddleware, saveIdempotencyResponse } from '@/api/middleware/idempotency';
+import { createIntentSchema } from '@/api/validators/intents';
+import { IntentStatus } from '@/contracts';
+import { startSearching } from '@/orchestrator/intentService';
+import { enqueueSearch } from '@/queue/producers';
+
+export async function intentRoutes(fastify: FastifyInstance): Promise<void> {
+  // POST /v1/intents
+  fastify.post('/v1/intents', {
+    preHandler: idempotencyMiddleware,
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const idempotencyKey = request.headers['x-idempotency-key'] as string;
+    if (!idempotencyKey) {
+      return reply.status(400).send({ error: 'X-Idempotency-Key header is required' });
+    }
+
+    const parsed = createIntentSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: 'Invalid input', details: parsed.error.errors });
+    }
+
+    const { userId, query, subject, maxBudget, currency, expiresAt } = parsed.data;
+
+    // Verify user exists
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      return reply.status(404).send({ error: `User not found: ${userId}` });
+    }
+
+    const intent = await prisma.purchaseIntent.create({
+      data: {
+        userId,
+        query,
+        subject: subject ?? null,
+        maxBudget,
+        currency,
+        status: IntentStatus.RECEIVED,
+        idempotencyKey,
+        expiresAt: expiresAt ? new Date(expiresAt) : null,
+      },
+    });
+
+    // Advance to SEARCHING and enqueue search job
+    await startSearching(intent.id);
+    await enqueueSearch(intent.id, { intentId: intent.id, userId, query, maxBudget, currency, subject });
+
+    const responseBody = { intentId: intent.id, status: IntentStatus.SEARCHING, createdAt: intent.createdAt };
+    await saveIdempotencyResponse(idempotencyKey, responseBody);
+
+    return reply.status(201).send(responseBody);
+  });
+
+  // GET /v1/intents/:intentId
+  fastify.get('/v1/intents/:intentId', async (request: FastifyRequest<{ Params: { intentId: string } }>, reply: FastifyReply) => {
+    const { intentId } = request.params;
+    const intent = await prisma.purchaseIntent.findUnique({
+      where: { id: intentId },
+      include: { virtualCard: true, auditEvents: { orderBy: { createdAt: 'asc' } } },
+    });
+
+    if (!intent) {
+      return reply.status(404).send({ error: `Intent not found: ${intentId}` });
+    }
+
+    return reply.send({ intent });
+  });
+}

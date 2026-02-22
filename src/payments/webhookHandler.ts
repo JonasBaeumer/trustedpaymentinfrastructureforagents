@@ -1,0 +1,59 @@
+import Stripe from 'stripe';
+import { getStripeClient } from './stripeClient';
+import { prisma } from '@/db/client';
+
+export async function handleStripeEvent(rawBody: Buffer | string, signature: string): Promise<void> {
+  const stripe = getStripeClient();
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  if (!webhookSecret) throw new Error('STRIPE_WEBHOOK_SECRET not set');
+
+  let event: Stripe.Event;
+  try {
+    event = stripe.webhooks.constructEvent(rawBody, signature, webhookSecret);
+  } catch (err) {
+    console.error(JSON.stringify({ level: 'error', message: 'Invalid Stripe webhook signature', error: String(err) }));
+    throw new Error(`Webhook signature verification failed: ${String(err)}`);
+  }
+
+  const intentId: string = (event.data.object as any)?.metadata?.intentId ?? 'unknown';
+
+  switch (event.type) {
+    case 'issuing_authorization.request': {
+      // MUST respond within 2 seconds — auto-approve in test mode
+      const auth = event.data.object as Stripe.Issuing.Authorization;
+      try {
+        await stripe.issuing.authorizations.approve(auth.id);
+      } catch (err) {
+        console.error(JSON.stringify({ level: 'error', message: 'Failed to approve authorization', error: String(err), intentId }));
+      }
+      await logAuditEvent(intentId, 'STRIPE_AUTHORIZATION_REQUEST', { authId: auth.id, amount: auth.amount });
+      break;
+    }
+
+    case 'issuing_authorization.created': {
+      const auth = event.data.object as Stripe.Issuing.Authorization;
+      await logAuditEvent(intentId, 'STRIPE_AUTHORIZATION_CREATED', { authId: auth.id, amount: auth.amount });
+      break;
+    }
+
+    case 'issuing_transaction.created': {
+      const txn = event.data.object as Stripe.Issuing.Transaction;
+      await logAuditEvent(intentId, 'STRIPE_TRANSACTION_CREATED', { transactionId: txn.id, amount: txn.amount });
+      break;
+    }
+
+    default:
+      console.log(JSON.stringify({ level: 'info', message: 'Unhandled Stripe event', type: event.type }));
+  }
+}
+
+async function logAuditEvent(intentId: string, eventName: string, payload: Record<string, unknown>): Promise<void> {
+  try {
+    if (intentId === 'unknown') return;
+    await prisma.auditEvent.create({
+      data: { intentId, actor: 'stripe', event: eventName, payload: payload as any },
+    });
+  } catch {
+    // Don't let audit logging failure break webhook processing
+  }
+}

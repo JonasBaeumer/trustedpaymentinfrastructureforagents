@@ -1,0 +1,157 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum IntentStatus {
+  RECEIVED
+  SEARCHING
+  QUOTED
+  AWAITING_APPROVAL
+  APPROVED
+  CARD_ISSUED
+  CHECKOUT_RUNNING
+  DONE
+  FAILED
+  DENIED
+  EXPIRED
+}
+
+enum LedgerEntryType {
+  RESERVE
+  SETTLE
+  RETURN
+}
+
+enum PotStatus {
+  ACTIVE
+  SETTLED
+  RETURNED
+}
+
+enum ApprovalDecisionType {
+  APPROVED
+  DENIED
+}
+
+model User {
+  id                  String          @id @default(cuid())
+  email               String          @unique
+  mainBalance         Int             @default(0)
+  maxBudgetPerIntent  Int             @default(50000)
+  merchantAllowlist   String[]        @default([])
+  mccAllowlist        String[]        @default([])
+  stripeCardholderId  String?
+  telegramChatId      String?
+  phoneNumber         String?
+  agentId             String?         @unique
+  createdAt           DateTime        @default(now())
+
+  intents             PurchaseIntent[]
+  ledgerEntries       LedgerEntry[]
+  pots                Pot[]
+}
+
+model PairingCode {
+  id              String    @id @default(cuid())
+  code            String    @unique
+  agentId         String    @unique
+  claimedByUserId String?
+  expiresAt       DateTime
+  createdAt       DateTime  @default(now())
+}
+
+model PurchaseIntent {
+  id               String       @id @default(cuid())
+  userId           String
+  query            String
+  subject          String?
+  maxBudget        Int
+  currency         String       @default("eur")
+  status           IntentStatus @default(RECEIVED)
+  metadata         Json         @default("{}")
+  idempotencyKey   String       @unique
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  expiresAt        DateTime?
+
+  user             User               @relation(fields: [userId], references: [id])
+  virtualCard      VirtualCard?
+  ledgerEntries    LedgerEntry[]
+  pot              Pot?
+  approvalDecision ApprovalDecision?
+  auditEvents      AuditEvent[]
+}
+
+model VirtualCard {
+  id           String    @id @default(cuid())
+  intentId     String    @unique
+  stripeCardId String    @unique
+  last4        String
+  revealedAt   DateTime?
+  frozenAt     DateTime?
+  cancelledAt  DateTime?
+  createdAt    DateTime  @default(now())
+
+  intent       PurchaseIntent @relation(fields: [intentId], references: [id])
+}
+
+model LedgerEntry {
+  id        String          @id @default(cuid())
+  userId    String
+  intentId  String
+  type      LedgerEntryType
+  amount    Int
+  currency  String          @default("eur")
+  createdAt DateTime        @default(now())
+
+  user      User           @relation(fields: [userId], references: [id])
+  intent    PurchaseIntent @relation(fields: [intentId], references: [id])
+}
+
+model Pot {
+  id             String    @id @default(cuid())
+  userId         String
+  intentId       String    @unique
+  reservedAmount Int
+  settledAmount  Int       @default(0)
+  status         PotStatus @default(ACTIVE)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  user           User           @relation(fields: [userId], references: [id])
+  intent         PurchaseIntent @relation(fields: [intentId], references: [id])
+}
+
+model ApprovalDecision {
+  id        String               @id @default(cuid())
+  intentId  String               @unique
+  decision  ApprovalDecisionType
+  actorId   String
+  reason    String?
+  createdAt DateTime             @default(now())
+
+  intent    PurchaseIntent @relation(fields: [intentId], references: [id])
+}
+
+model AuditEvent {
+  id        String   @id @default(cuid())
+  intentId  String
+  actor     String
+  event     String
+  payload   Json     @default("{}")
+  createdAt DateTime @default(now())
+
+  intent    PurchaseIntent @relation(fields: [intentId], references: [id])
+}
+
+model IdempotencyRecord {
+  id           String   @id @default(cuid())
+  key          String   @unique
+  responseBody Json
+  createdAt    DateTime @default(now())
+}

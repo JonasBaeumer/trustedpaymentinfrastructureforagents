@@ -1,0 +1,101 @@
+import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import { idempotencyMiddleware, saveIdempotencyResponse } from '@/api/middleware/idempotency';
+import { approvalDecisionSchema } from '@/api/validators/approvals';
+import { prisma } from '@/db/client';
+import { ApprovalDecisionType, IntentStatus, InsufficientFundsError } from '@/contracts';
+import { recordDecision } from '@/approval/approvalService';
+import { reserveForIntent, returnIntent } from '@/ledger/potService';
+import { issueVirtualCard } from '@/payments/cardService';
+import { markCardIssued, startCheckout } from '@/orchestrator/intentService';
+import { enqueueCheckout } from '@/queue/producers';
+
+// TODO: add user auth
+
+export async function approvalRoutes(fastify: FastifyInstance): Promise<void> {
+  fastify.post('/v1/approvals/:intentId/decision', {
+    preHandler: idempotencyMiddleware,
+  }, async (request: FastifyRequest<{ Params: { intentId: string } }>, reply: FastifyReply) => {
+    const idempotencyKey = request.headers['x-idempotency-key'] as string;
+    if (!idempotencyKey) {
+      return reply.status(400).send({ error: 'X-Idempotency-Key header is required' });
+    }
+
+    const { intentId } = request.params;
+    const parsed = approvalDecisionSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: 'Invalid input', details: parsed.error.errors });
+    }
+
+    const intent = await prisma.purchaseIntent.findUnique({
+      where: { id: intentId },
+      include: { user: true },
+    });
+    if (!intent) {
+      return reply.status(404).send({ error: `Intent not found: ${intentId}` });
+    }
+    if (intent.status !== IntentStatus.AWAITING_APPROVAL) {
+      return reply.status(409).send({ error: `Intent is not in AWAITING_APPROVAL state (current: ${intent.status})` });
+    }
+
+    const { decision, actorId, reason } = parsed.data;
+    const decisionType = decision as ApprovalDecisionType;
+
+    try {
+      // 1. Record decision — idempotent, transitions intent to APPROVED or DENIED
+      await recordDecision(intentId, decisionType, actorId, reason);
+
+      let finalStatus: IntentStatus;
+
+      if (decisionType === ApprovalDecisionType.APPROVED) {
+        const metadata = intent.metadata as Record<string, unknown>;
+
+        // 2. Reserve funds in ledger pot (deducts from user.mainBalance)
+        await reserveForIntent(intent.userId, intentId, intent.maxBudget);
+
+        let card;
+        try {
+          // 3. Issue restricted Stripe virtual card
+          card = await issueVirtualCard(intentId, intent.maxBudget, intent.currency, {
+            mccAllowlist: intent.user.mccAllowlist,
+          });
+        } catch (cardErr) {
+          // Card issuance failed — return reserved funds so balance is not lost
+          await returnIntent(intentId).catch(() => {});
+          throw cardErr;
+        }
+
+        // 4. Transition APPROVED → CARD_ISSUED (via orchestrator)
+        await markCardIssued(intentId);
+
+        // 5. Transition CARD_ISSUED → CHECKOUT_RUNNING
+        await startCheckout(intentId);
+
+        // 6. Enqueue checkout job for the worker
+        await enqueueCheckout(intentId, {
+          intentId,
+          userId: intent.userId,
+          merchantName: (metadata.merchantName as string) ?? '',
+          merchantUrl: (metadata.merchantUrl as string) ?? '',
+          price: (metadata.price as number) ?? intent.maxBudget,
+          currency: intent.currency,
+          stripeCardId: card.stripeCardId,
+          last4: card.last4,
+        });
+
+        finalStatus = IntentStatus.CHECKOUT_RUNNING;
+      } else {
+        finalStatus = IntentStatus.DENIED;
+      }
+
+      const responseBody = { intentId, decision, status: finalStatus };
+      await saveIdempotencyResponse(idempotencyKey, responseBody);
+      return reply.send(responseBody);
+
+    } catch (err) {
+      if (err instanceof InsufficientFundsError) {
+        return reply.status(422).send({ error: err.message });
+      }
+      throw err;
+    }
+  });
+}
