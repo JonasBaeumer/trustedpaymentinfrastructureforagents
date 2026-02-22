@@ -2,6 +2,7 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { env } from '@/config/env';
 import { prisma } from '@/db/client';
 import { handleTelegramCallback } from '@/telegram/callbackHandler';
+import { handleTelegramMessage } from '@/telegram/signupHandler';
 import { linkTelegramSchema } from '@/api/validators/telegram';
 
 export async function telegramRoutes(fastify: FastifyInstance): Promise<void> {
@@ -17,6 +18,12 @@ export async function telegramRoutes(fastify: FastifyInstance): Promise<void> {
     if (update?.callback_query) {
       handleTelegramCallback(update).catch((err: unknown) => {
         fastify.log.error({ message: 'Telegram callback handler error', error: String(err) });
+      });
+    }
+
+    if (update?.message) {
+      handleTelegramMessage(update).catch((err: unknown) => {
+        fastify.log.error({ message: 'Telegram message handler error', error: String(err) });
       });
     }
 
