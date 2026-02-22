@@ -1,6 +1,32 @@
 # Telegram Approval Setup
 
-This guide connects your Telegram account to AgentPay so you receive inline-keyboard approval requests when an agent finds a product to buy.
+This guide sets up the Telegram bot so users can:
+1. **Sign up** — complete the self-service onboarding flow initiated by OpenClaw
+2. **Approve or reject purchases** — receive and respond to inline-keyboard approval requests
+
+---
+
+## How the signup flow works
+
+OpenClaw registers with AgentPay and receives a short pairing code. It passes that code to the user. The user opens a chat with the bot and sends `/start <code>`, then replies with their email address. AgentPay creates their account and permanently links it to the OpenClaw instance — no admin intervention needed.
+
+```
+OpenClaw                    AgentPay Backend           User (Telegram)
+   │                              │                         │
+   │── POST /v1/agent/register ──▶│                         │
+   │◀── { pairingCode: "AB3X9K2M" }                        │
+   │                              │                         │
+   │  (tells user the code        │                         │
+   │   and the bot username)      │                         │
+   │                              │◀── /start AB3X9K2M ────│
+   │                              │    "What's your email?" │
+   │                              │◀── user@example.com ───│
+   │                              │    "✅ Account created!"│
+   │                              │                         │
+   │── GET /v1/agent/user ────────▶── { userId: "clx..." } │
+```
+
+See [docs/openclaw.md](openclaw.md) for the full OpenClaw integration guide.
 
 ---
 
@@ -21,34 +47,22 @@ This guide connects your Telegram account to AgentPay so you receive inline-keyb
 
 ---
 
-## Step 2 — Find your Telegram chat ID
-
-1. Open Telegram and start a chat with [@userinfobot](https://t.me/userinfobot)
-2. Send any message — it replies with your numeric ID, e.g. `1511820101` — copy it
-
----
-
-## Step 3 — Configure `.env`
+## Step 2 — Configure `.env`
 
 Add the following to your `.env` file (the placeholders are already there):
 
 ```
 TELEGRAM_BOT_TOKEN=<your bot token from Step 1>
 TELEGRAM_WEBHOOK_SECRET=<any random string you choose, e.g. my-secret-123>
-TELEGRAM_TEST_CHAT_ID=<your chat ID from Step 2>
 ```
 
 Restart the server after saving: `Ctrl+C` then `npm run dev`.
 
----
-
-## Step 4 — Start a conversation with your bot
-
-Open Telegram, search for your bot's username (e.g. `@agentpay_dev_bot`), and send it `/start`. This is required before the bot can send you messages.
+> `TELEGRAM_TEST_CHAT_ID` is optional — only used to smoke-test notifications during local development without going through the full signup flow.
 
 ---
 
-## Step 5 — Expose your local server with ngrok
+## Step 3 — Expose your local server with ngrok
 
 Telegram webhooks require a public HTTPS URL. Use ngrok to create one.
 
@@ -71,7 +85,7 @@ Copy the `https://` URL shown, e.g. `https://abc123.ngrok-free.app`.
 
 ---
 
-## Step 6 — Register the webhook with Telegram
+## Step 4 — Register the webhook with Telegram
 
 Run this once (replace both placeholders):
 
@@ -86,8 +100,9 @@ curl -X POST "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
   }'
 ```
 
-> **Note:** `message` is required for the user signup flow (`/start <code>` and email step).
-> `callback_query` is required for the approve/reject buttons.
+> **Note:** Both `message` and `callback_query` are required.
+> `message` handles the signup flow (`/start <code>` and the email reply).
+> `callback_query` handles the approve/reject buttons.
 
 You should see: `{"ok":true,"result":true,"description":"Webhook was set"}`
 
@@ -95,35 +110,53 @@ You should see: `{"ok":true,"result":true,"description":"Webhook was set"}`
 
 ---
 
-## Step 7 — Link your Telegram account to your user
+## Step 5 — User signup via OpenClaw
 
-Find your AgentPay user ID (check the seed output or Prisma Studio), then:
+Users are created through the OpenClaw-initiated pairing flow — **not** through any manual admin step.
+
+**What OpenClaw does (once, on first run):**
 
 ```bash
-curl -X POST http://localhost:3000/v1/users/<YOUR_USER_ID>/link-telegram \
-  -H "Content-Type: application/json" \
-  -d '{"telegramChatId": "<YOUR_CHAT_ID>"}'
+curl -X POST http://localhost:3000/v1/agent/register \
+  -H "X-Worker-Key: local-dev-worker-key"
+# → { "agentId": "ag_abc123", "pairingCode": "AB3X9K2M", "expiresAt": "..." }
 ```
 
-Expected response:
-```json
-{"userId":"...","telegramChatId":"...","linked":true}
+OpenClaw stores the `agentId` permanently and gives the user the pairing code along with the bot username.
+
+**What the user does in Telegram:**
+
+1. Open the bot (search for your bot's username, e.g. `@agentpay_dev_bot`)
+2. Send: `/start AB3X9K2M` (with the code from OpenClaw)
+3. The bot replies: *"What email address should we use for your account?"*
+4. Reply with your email address
+5. The bot confirms: *"✅ Account created! Your OpenClaw is now linked."*
+
+After this, OpenClaw can resolve the `userId`:
+
+```bash
+curl http://localhost:3000/v1/agent/user \
+  -H "X-Worker-Key: local-dev-worker-key" \
+  -H "X-Agent-Id: ag_abc123"
+# → { "status": "claimed", "userId": "clxyz..." }
 ```
+
+The pairing code is valid for 30 minutes. If it expires before the user signs up, OpenClaw calls `POST /v1/agent/register` again with `{ "agentId": "ag_abc123" }` to get a fresh code.
 
 ---
 
-## Step 8 — Test it
+## Step 6 — Test it
 
-Create an intent and run the worker:
+Once a user is signed up, create an intent and run the stub worker:
 
 ```bash
-# Create an intent
+# Create an intent (use the userId from Step 5)
 curl -X POST http://localhost:3000/v1/intents \
   -H "Content-Type: application/json" \
   -H "X-Idempotency-Key: test-1" \
   -d '{"userId":"<YOUR_USER_ID>","query":"Sony WH-1000XM5","subject":"Buy Sony headphones","maxBudget":35000}'
 
-# Run the stub worker (posts a quote, triggers the notification)
+# Run the stub worker (posts a quote, triggers the Telegram notification)
 npm run worker
 ```
 
@@ -148,7 +181,9 @@ Tap ✅ Approve — the intent moves to `CHECKOUT_RUNNING` and the message updat
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
 | No Telegram message arrives | Bot token not loaded | Restart the server after editing `.env` |
-| `"chat not found"` error in logs | Never messaged the bot | Send `/start` to your bot in Telegram (Step 4) |
-| Buttons do nothing | Webhook not registered or ngrok restarted | Re-run Step 6 with the current ngrok URL |
-| `401` on webhook endpoint | Wrong `TELEGRAM_WEBHOOK_SECRET` | Ensure `.env` value matches the `secret_token` in Step 6 |
+| `/start <code>` gives no reply | Webhook not registered or wrong URL | Re-run Step 4 with the current ngrok URL |
+| `"chat not found"` error in logs | User never sent a message to the bot | User must send `/start <code>` first (Step 5) |
+| `"invalid or expired code"` reply | Code expired (30 min TTL) | OpenClaw calls `POST /v1/agent/register` with existing `agentId` to renew |
+| Buttons do nothing | Webhook not registered or ngrok restarted | Re-run Step 4 with the current ngrok URL |
+| `401` on webhook endpoint | Wrong `TELEGRAM_WEBHOOK_SECRET` | Ensure `.env` value matches the `secret_token` in Step 4 |
 | ngrok auth error | No authtoken configured | Run `ngrok config add-authtoken <token>` |
