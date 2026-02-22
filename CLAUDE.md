@@ -25,26 +25,32 @@ The user approves a budget → the backend issues a restricted Stripe virtual ca
 npm install
 
 # Database
-npx prisma migrate dev          # run migrations
-npx prisma migrate reset        # reset DB (dev only)
-npx prisma studio               # browse DB
+npm run db:migrate              # run pending migrations
+npm run db:reset                # reset and re-migrate (dev only)
+npm run seed                    # create demo@agentpay.dev (set TELEGRAM_TEST_CHAT_ID in .env to pre-link Telegram)
+npx prisma studio               # browse DB in browser
 
 # Dev
 npm run dev                     # start Fastify server (ts-node-dev)
-npx ts-node src/worker/stubWorker.ts   # run the local stub worker
+npm run worker                  # run stub BullMQ worker (simulates OpenClaw locally)
 
 # Tests
-npm test                        # all tests
-npm test -- --testPathPattern=orchestrator   # single module
-npm run test:integration        # integration tests only (requires running DB + Redis)
+npm test                               # all unit tests (no DB or Redis required)
+npm run test:integration               # integration tests (requires docker compose up -d first)
+npm test -- --testPathPattern=<module> # single module
 
-# Local infra
+# Local infra (required before running the dev server or integration tests)
 docker compose up -d            # start Postgres + Redis
 docker compose down
 
 # Stripe webhooks (local dev)
 stripe listen --forward-to localhost:3000/v1/webhooks/stripe
 ```
+
+## Developer Guides
+
+- Telegram manual testing (with and without OpenClaw): `docs/telegram-setup.md`
+- OpenClaw HTTP API reference: `docs/openclaw.md`
 
 ## Architecture
 
