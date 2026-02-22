@@ -1,8 +1,8 @@
 import { Queue } from 'bullmq';
-import { createRedisConnection } from '@/config/redis';
+import { getRedisConnectionConfig } from '@/config/redis';
 
 export const searchQueue = new Queue('search-queue', {
-  connection: createRedisConnection(),
+  connection: getRedisConnectionConfig(),
   defaultJobOptions: {
     attempts: 3,
     backoff: { type: 'exponential', delay: 1000 },
@@ -12,7 +12,7 @@ export const searchQueue = new Queue('search-queue', {
 });
 
 export const checkoutQueue = new Queue('checkout-queue', {
-  connection: createRedisConnection(),
+  connection: getRedisConnectionConfig(),
   defaultJobOptions: {
     attempts: 3,
     backoff: { type: 'exponential', delay: 1000 },

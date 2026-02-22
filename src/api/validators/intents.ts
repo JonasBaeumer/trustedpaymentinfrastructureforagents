@@ -3,8 +3,9 @@ import { z } from 'zod';
 export const createIntentSchema = z.object({
   userId: z.string().min(1),
   query: z.string().min(1).max(500),
+  subject: z.string().min(1).max(100).optional(),
   maxBudget: z.number().int().positive().max(1000000), // max £10,000 in pence
-  currency: z.string().length(3).default('gbp'),
+  currency: z.string().length(3).default('eur'),
   expiresAt: z.string().datetime().optional(),
 });
 

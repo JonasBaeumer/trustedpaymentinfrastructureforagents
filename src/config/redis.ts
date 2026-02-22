@@ -14,3 +14,13 @@ export function createRedisConnection(): Redis {
   const url = process.env.REDIS_URL || 'redis://localhost:6379';
   return new Redis(url, { maxRetriesPerRequest: null });
 }
+
+// Returns a plain config object for BullMQ (avoids ioredis version conflicts)
+export function getRedisConnectionConfig(): { host: string; port: number; maxRetriesPerRequest: null } {
+  const url = new URL(process.env.REDIS_URL || 'redis://localhost:6379');
+  return {
+    host: url.hostname,
+    port: parseInt(url.port || '6379', 10),
+    maxRetriesPerRequest: null,
+  };
+}

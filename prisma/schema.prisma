@@ -46,6 +46,8 @@ model User {
   merchantAllowlist   String[]        @default([])
   mccAllowlist        String[]        @default([])
   stripeCardholderId  String?
+  telegramChatId      String?
+  phoneNumber         String?
   createdAt           DateTime        @default(now())
 
   intents             PurchaseIntent[]
@@ -57,8 +59,9 @@ model PurchaseIntent {
   id               String       @id @default(cuid())
   userId           String
   query            String
+  subject          String?
   maxBudget        Int
-  currency         String       @default("gbp")
+  currency         String       @default("eur")
   status           IntentStatus @default(RECEIVED)
   metadata         Json         @default("{}")
   idempotencyKey   String       @unique
@@ -93,7 +96,7 @@ model LedgerEntry {
   intentId  String
   type      LedgerEntryType
   amount    Int
-  currency  String          @default("gbp")
+  currency  String          @default("eur")
   createdAt DateTime        @default(now())
 
   user      User           @relation(fields: [userId], references: [id])

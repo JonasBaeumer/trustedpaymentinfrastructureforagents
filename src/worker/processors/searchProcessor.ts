@@ -1,5 +1,5 @@
 import { Worker, Job } from 'bullmq';
-import { createRedisConnection } from '@/config/redis';
+import { getRedisConnectionConfig } from '@/config/redis';
 import { SearchIntentJob } from '@/contracts';
 
 const API_BASE = process.env.API_BASE_URL || 'http://localhost:3000';
@@ -37,6 +37,6 @@ export function createSearchWorker(): Worker {
 
       console.log(JSON.stringify({ level: 'info', message: 'Search job completed — quote posted', intentId }));
     },
-    { connection: createRedisConnection(), concurrency: 5 },
+    { connection: getRedisConnectionConfig(), concurrency: 5 },
   );
 }

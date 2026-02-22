@@ -4,6 +4,7 @@ export interface SearchIntentJob {
   query: string;
   maxBudget: number;
   currency: string;
+  subject?: string;
 }
 
 export interface CheckoutIntentJob {

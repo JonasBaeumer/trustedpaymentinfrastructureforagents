@@ -21,7 +21,7 @@ export async function intentRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.status(400).send({ error: 'Invalid input', details: parsed.error.errors });
     }
 
-    const { userId, query, maxBudget, currency, expiresAt } = parsed.data;
+    const { userId, query, subject, maxBudget, currency, expiresAt } = parsed.data;
 
     // Verify user exists
     const user = await prisma.user.findUnique({ where: { id: userId } });
@@ -33,6 +33,7 @@ export async function intentRoutes(fastify: FastifyInstance): Promise<void> {
       data: {
         userId,
         query,
+        subject: subject ?? null,
         maxBudget,
         currency,
         status: IntentStatus.RECEIVED,
@@ -43,7 +44,7 @@ export async function intentRoutes(fastify: FastifyInstance): Promise<void> {
 
     // Advance to SEARCHING and enqueue search job
     await startSearching(intent.id);
-    await enqueueSearch(intent.id, { intentId: intent.id, userId, query, maxBudget, currency });
+    await enqueueSearch(intent.id, { intentId: intent.id, userId, query, maxBudget, currency, subject });
 
     const responseBody = { intentId: intent.id, status: IntentStatus.SEARCHING, createdAt: intent.createdAt };
     await saveIdempotencyResponse(idempotencyKey, responseBody);

@@ -19,6 +19,7 @@ export interface PurchaseIntentData {
   id: string;
   userId: string;
   query: string;
+  subject: string | null;
   maxBudget: number;
   currency: string;
   status: PrismaIntentStatus;

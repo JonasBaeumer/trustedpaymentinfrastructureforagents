@@ -15,4 +15,7 @@ export const env = {
   WORKER_API_KEY: requireEnv('WORKER_API_KEY'),
   PORT: parseInt(process.env.PORT || '3000', 10),
   NODE_ENV: process.env.NODE_ENV || 'development',
+  TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN || '',
+  TELEGRAM_WEBHOOK_SECRET: process.env.TELEGRAM_WEBHOOK_SECRET || '',
+  TELEGRAM_TEST_CHAT_ID: process.env.TELEGRAM_TEST_CHAT_ID || '',
 };
