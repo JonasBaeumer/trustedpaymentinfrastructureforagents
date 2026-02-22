@@ -94,13 +94,15 @@ OpenClaw                              Backend
   │◀── { status: AWAITING_APPROVAL } ───│     (keep polling)
   │                          ...        │
   │── GET /v1/agent/decision/:intentId ▶│
-  │◀── { status: APPROVED,              │  5. Approved — card details delivered once
-  │      card: { number, cvc, ... }} ───│
+  │◀── { status: APPROVED,              │  5. Approved — checkout params delivered
+  │      checkout: { intentId,          │
+  │        amount, currency } } ────────│
   │                                     │
-  │  6. Simulate checkout using card    │
-  │── POST /v1/checkout/simulate ──────▶│  6a. Merchant charges the card
-  │   { cardNumber, cvc, expMonth,      │      (triggers Stripe Issuing auth)
-  │     expYear, amount }               │
+  │  6. Simulate checkout using the     │
+  │     params from step 5              │
+  │── POST /v1/checkout/simulate ──────▶│  6a. Backend charges the card
+  │   { intentId, amount, currency,     │      (Stripe Issuing auth + capture)
+  │     merchantName }                  │
   │◀── { success, chargeId, amount } ───│
   │                                     │
   │── POST /v1/agent/result ───────────▶│  7. Report outcome
@@ -325,33 +327,27 @@ Poll again in a few seconds.
 
 Stop polling. Do not attempt checkout.
 
-**Response `200` — approved, card delivered (first poll only):**
+**Response `200` — approved:**
 
 ```json
 {
   "intentId": "clxyz123",
   "status": "APPROVED",
-  "card": {
-    "number": "4242424242424242",
-    "cvc": "123",
-    "expMonth": 12,
-    "expYear": 2027,
-    "last4": "4242"
+  "checkout": {
+    "intentId": "clxyz123",
+    "amount": 27999,
+    "currency": "gbp"
   }
 }
 ```
 
-**The `card` object is delivered exactly once.** Store it in memory for the duration of
-checkout. Do not persist it to disk, logs, or any external system.
+The `checkout` object contains exactly the params you need to call
+`POST /v1/checkout/simulate` in the next step. Pass them through directly (plus
+`merchantName`). No card credentials are involved — the backend looks up the card
+server-side using the `intentId`.
 
-**Response `200` — approved, card already delivered:**
-
-```json
-{ "intentId": "clxyz123", "status": "APPROVED" }
-```
-
-The card was delivered on an earlier poll. If you no longer have the card in memory,
-report failure via `POST /v1/agent/result` — do not retry the reveal.
+The `amount` is the quoted price (`price` from your earlier `POST /v1/agent/quote`
+call); `maxBudget` is used as a fallback if no quote price is recorded.
 
 **Error responses:**
 
@@ -365,7 +361,7 @@ report failure via `POST /v1/agent/result` — do not retry the reveal.
 - Start polling ~2 seconds after `POST /v1/agent/quote` returns.
 - Poll every 5 seconds.
 - Stop after 10 minutes (120 polls) and treat as expired — report failure.
-- Stop immediately on `DENIED` or on any `APPROVED` response (with or without card).
+- Stop immediately on `DENIED` or on `APPROVED`.
 
 ---
 
@@ -434,13 +430,16 @@ or on failure:
 
 ### POST /v1/checkout/simulate
 
-Simulate a merchant charging a virtual card. Use this after receiving card credentials
-from `GET /v1/agent/decision/:intentId` to trigger the full Stripe Issuing authorization
-flow without a real browser checkout.
+Simulate a merchant checkout. Use this after `GET /v1/agent/decision/:intentId` returns
+`APPROVED` — pass the `checkout` object from that response (plus `merchantName`) directly
+to this endpoint.
 
-> **Test mode only.** This endpoint accepts raw card credentials and creates a real Stripe
-> PaymentIntent against them. It is decoupled from the intent state machine — it does not
-> know about intents, pots, or ledger entries. Those are settled separately via
+The backend looks up the issued virtual card by `intentId` and triggers a real Stripe
+Issuing authorization + capture. No raw card credentials are required or accepted.
+
+> **Test mode only.** Uses `stripe.testHelpers.issuing.authorizations` — works on any
+> standard Stripe test account without special opt-ins. The endpoint is decoupled from
+> the intent state machine; intents and ledger entries are settled separately via
 > `POST /v1/agent/result`.
 
 **Auth:** None — the card's own spending controls (set at issuance) are the security layer.
@@ -449,24 +448,28 @@ flow without a real browser checkout.
 
 | Field | Type | Required | Notes |
 |-------|------|----------|-------|
-| `cardNumber` | `string` | Yes | 13–19 digit card number from `/decision` |
-| `cvc` | `string` | Yes | 3–4 digit CVC from `/decision` |
-| `expMonth` | `integer` | Yes | 1–12 |
-| `expYear` | `integer` | Yes | 4-digit year |
+| `intentId` | `string` | Yes | `intentId` from the `/decision` `checkout` object |
 | `amount` | `integer` | Yes | Smallest currency unit (cents/pence), max 1 000 000 |
 | `currency` | `string` | No | 3-letter ISO code; default `eur` |
 | `merchantName` | `string` | No | Display label; default `Simulated Merchant` |
 
 ```json
 {
-  "cardNumber": "4242424242424242",
-  "cvc": "123",
-  "expMonth": 12,
-  "expYear": 2027,
-  "amount": 5000,
-  "currency": "eur",
-  "merchantName": "Amazon DE"
+  "intentId": "clxyz123",
+  "amount": 27999,
+  "currency": "gbp",
+  "merchantName": "Amazon UK"
 }
+```
+
+**Typical usage — pass through the `checkout` object from `/decision`:**
+
+```js
+const { checkout } = await pollDecision(intentId); // GET /v1/agent/decision/:intentId
+const result = await simulateCheckout({
+  ...checkout,                // intentId, amount, currency
+  merchantName: 'Amazon UK',
+});
 ```
 
 **Success response `200`:**
@@ -474,9 +477,9 @@ flow without a real browser checkout.
 ```json
 {
   "success": true,
-  "chargeId": "pi_...",
-  "amount": 5000,
-  "currency": "eur"
+  "chargeId": "iauth_...",
+  "amount": 27999,
+  "currency": "gbp"
 }
 ```
 
@@ -485,38 +488,37 @@ flow without a real browser checkout.
 ```json
 {
   "success": false,
-  "declineCode": "spending_controls_violation",
-  "message": "Your card's spending limit has been exceeded."
+  "declineCode": "spending_controls",
+  "message": "Card declined"
 }
 ```
 
-The `declineCode` mirrors Stripe's `decline_code`. Common values:
+Common `declineCode` values:
 - `card_declined` — generic decline
-- `spending_controls_violation` — amount exceeds the card's budget limit
-- `do_not_honor` — issuer blocked the transaction
+- `spending_controls` — amount exceeds the card's budget limit
+- `insufficient_funds` — Stripe test balance exhausted
 
 **Error responses:**
 
 | Status | Condition |
 |--------|-----------|
-| `400` | Missing or invalid fields (cardNumber, cvc format, expYear in the past, etc.) |
+| `400` | Missing or invalid fields (`intentId` empty, `amount` missing or zero, etc.) |
 | `402` | Card declined by Stripe |
+| `404` | No virtual card found for this `intentId` (card not yet issued) |
 | `500` | Unexpected error |
 
 ---
 
 ## Card Security Rules
 
-- **Never log card details.** Do not write `number`, `cvc`, or expiry to stdout, files, or
-  any external system.
-- **Use the card in memory only.** Store it in a local variable for the duration of the
-  checkout request, then discard it.
+- **OpenClaw never handles raw card credentials.** The virtual card's PAN, CVC, and expiry
+  are managed entirely server-side. The `/decision` endpoint returns `checkout` params
+  (`intentId`, `amount`, `currency`), not card numbers.
 - **One card, one checkout.** The card is spending-limited to the approved amount and
-  cancelled after `POST /v1/agent/result` returns. Do not attempt multiple checkouts.
-- **Single reveal.** The backend delivers card details on the first `/decision` poll that
-  returns `APPROVED`. Subsequent polls return `{ status: "APPROVED" }` without card data.
-  If you missed the card (e.g. after a process restart), call `POST /v1/agent/result` with
-  `success: false` immediately — do not try to re-obtain the card.
+  cancelled after `POST /v1/agent/result` returns. Do not call `POST /v1/checkout/simulate`
+  more than once per intent.
+- **The `intentId` is the key.** Pass it through from the `/decision` response to
+  `/checkout/simulate`. The backend uses it to look up the card server-side.
 
 ---
 
@@ -526,7 +528,7 @@ The `declineCode` mirrors Stripe's `decline_code`. Common values:
 |--------|----------------------|
 | `SEARCHING` | Intent registered — submit your quote via `POST /v1/agent/quote` |
 | `AWAITING_APPROVAL` | User has not decided yet — keep polling `/decision` |
-| `APPROVED` | Returned by `/decision` when the card is ready — first poll includes card details, subsequent polls do not |
+| `APPROVED` | Returned by `/decision` when the card is ready — response includes `checkout` params to pass to `POST /v1/checkout/simulate` |
 | `DENIED` | User rejected — stop, do not checkout |
 | `CHECKOUT_RUNNING` | The approved state you must be in to call `POST /v1/agent/result` |
 | `DONE` | Purchase complete — terminal state |
