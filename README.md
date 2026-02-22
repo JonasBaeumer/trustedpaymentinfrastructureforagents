@@ -5,7 +5,7 @@ A backend system enabling AI agents to complete shopping tasks on behalf of user
 ## Architecture
 
 ```
-Telegram (later) ──┐
+Telegram bot ──────┐
 OpenClaw worker ───┤──▶ API Gateway (Fastify :3000)
 Stripe webhooks ───┘          │
                               ├──▶ Orchestrator (state machine)
@@ -33,12 +33,13 @@ RECEIVED → SEARCHING → QUOTED → AWAITING_APPROVAL → APPROVED → CARD_IS
 - Node.js 18+
 - Docker (for Postgres + Redis)
 - Stripe account (test mode keys)
+- Telegram bot token (for approval notifications and user signup) — see [docs/telegram-setup.md](docs/telegram-setup.md)
 
 ### 1. Install and configure
 ```bash
 npm install
 cp .env.example .env
-# Edit .env — fill in STRIPE_SECRET_KEY from Stripe Dashboard (test mode)
+# Edit .env — fill in STRIPE_SECRET_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET
 ```
 
 ### 2. Start infrastructure
@@ -57,12 +58,42 @@ npm run seed            # creates demo user (demo@agentpay.dev, £1000 balance)
 npm run dev             # http://localhost:3000
 ```
 
-### 5. (Optional) Start the stub worker
+### 5. Expose the server to the internet (required for Telegram)
+
+Telegram webhooks require a public HTTPS URL. Use [ngrok](https://ngrok.com) when running locally.
+
+```bash
+# Install (macOS)
+brew install ngrok
+ngrok config add-authtoken <your-authtoken>   # one-time, free account at ngrok.com
+
+# Run in a separate terminal (keep it running)
+ngrok http 3000
+# → Forwarding  https://abc123.ngrok-free.app → localhost:3000
+```
+
+Register the public URL with Telegram once (replace the placeholders):
+
+```bash
+curl -X POST "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://<your-ngrok-url>/v1/webhooks/telegram",
+    "secret_token": "<TELEGRAM_WEBHOOK_SECRET>",
+    "allowed_updates": ["message", "callback_query"],
+    "drop_pending_updates": true
+  }'
+```
+
+> **Note:** ngrok generates a new URL on each restart (free tier). Re-run the `setWebhook`
+> command whenever the URL changes. See [docs/telegram-setup.md](docs/telegram-setup.md) for the full guide.
+
+### 6. (Optional) Start the stub worker
 ```bash
 npm run worker          # processes BullMQ jobs, simulates OpenClaw
 ```
 
-### 6. (Optional) Forward Stripe webhooks for local dev
+### 7. (Optional) Forward Stripe webhooks for local dev
 ```bash
 stripe listen --forward-to localhost:3000/v1/webhooks/stripe
 # Copy the whsec_... secret into .env as STRIPE_WEBHOOK_SECRET

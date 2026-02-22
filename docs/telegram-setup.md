@@ -81,10 +81,13 @@ curl -X POST "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
   -d '{
     "url": "https://<your-ngrok-url>/v1/webhooks/telegram",
     "secret_token": "<TELEGRAM_WEBHOOK_SECRET>",
-    "allowed_updates": ["callback_query"],
+    "allowed_updates": ["message", "callback_query"],
     "drop_pending_updates": true
   }'
 ```
+
+> **Note:** `message` is required for the user signup flow (`/start <code>` and email step).
+> `callback_query` is required for the approve/reject buttons.
 
 You should see: `{"ok":true,"result":true,"description":"Webhook was set"}`
 

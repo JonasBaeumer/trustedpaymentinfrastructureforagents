@@ -69,6 +69,9 @@ For local development the default value is `local-dev-worker-key`.
 
 ## Full Integration Flow
 
+> **Prerequisite:** complete [Onboarding](#onboarding-first-time-setup) before making
+> any purchase. You need a stable `agentId` and a linked `userId`.
+
 OpenClaw drives every step. The backend responds to requests — it never pushes to the agent.
 
 ```
