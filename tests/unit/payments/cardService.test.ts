@@ -33,7 +33,7 @@ const newUser = { id: 'user-1', email: 'test@example.com', stripeCardholderId: n
 const returningUser = { id: 'user-2', email: 'returning@example.com', stripeCardholderId: 'ich_existing' };
 
 function setupHappyPathMocks(intentId: string, user = newUser) {
-  (mockPrisma.purchaseIntent.findUnique as jest.Mock).mockResolvedValue({ id: intentId, user, currency: 'gbp' });
+  (mockPrisma.purchaseIntent.findUnique as jest.Mock).mockResolvedValue({ id: intentId, user, currency: 'gbp', query: 'test headphones', subject: null });
   mockStripe.issuing.cardholders.create.mockResolvedValue({ id: 'ich_new' });
   mockStripe.issuing.cards.create.mockResolvedValue({ id: 'ic_123', last4: '4242', exp_month: 12, exp_year: 2027 });
   (mockPrisma.user.update as jest.Mock).mockResolvedValue({ ...user, stripeCardholderId: 'ich_new' });
@@ -75,7 +75,7 @@ describe('issueVirtualCard', () => {
   });
 
   it('does not store PAN or CVC in DB', async () => {
-    (mockPrisma.purchaseIntent.findUnique as jest.Mock).mockResolvedValue({ id: 'intent-1', user: newUser, currency: 'gbp' });
+    (mockPrisma.purchaseIntent.findUnique as jest.Mock).mockResolvedValue({ id: 'intent-1', user: newUser, currency: 'gbp', query: 'test', subject: null });
     mockStripe.issuing.cardholders.create.mockResolvedValue({ id: 'ich_new' });
     mockStripe.issuing.cards.create.mockResolvedValue({
       id: 'ic_123', last4: '1234', number: '4242424242424242', cvc: '123',
@@ -122,7 +122,7 @@ describe('issueVirtualCard', () => {
 
     expect(mockStripe.issuing.cards.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        metadata: { intentId: 'intent-webhook-test' },
+        metadata: expect.objectContaining({ intentId: 'intent-webhook-test' }),
       }),
       expect.anything(),
     );
@@ -154,7 +154,7 @@ describe('issueVirtualCard', () => {
 
   it('reuses existing cardholderId and does NOT call cardholders.create for returning user', async () => {
     (mockPrisma.purchaseIntent.findUnique as jest.Mock).mockResolvedValue({
-      id: 'intent-returning', user: returningUser, currency: 'gbp',
+      id: 'intent-returning', user: returningUser, currency: 'gbp', query: 'test', subject: null,
     });
     mockStripe.issuing.cards.create.mockResolvedValue({ id: 'ic_456', last4: '9999' });
     (mockPrisma.virtualCard.create as jest.Mock).mockResolvedValue({

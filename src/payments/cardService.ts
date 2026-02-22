@@ -33,6 +33,7 @@ export async function issueVirtualCard(
       newCardholder = await stripe.issuing.cardholders.create({
         name: 'Agent Buyer',
         email: intent.user.email,
+        phone_number: intent.user.phoneNumber ?? '+15555555555',
         type: 'individual',
         billing: {
           address: {
@@ -67,7 +68,11 @@ export async function issueVirtualCard(
         currency: currency.toLowerCase(),
         type: 'virtual',
         spending_controls: buildSpendingControls(amount, options.mccAllowlist),
-        metadata: { intentId },
+        metadata: {
+          intentId,
+          purpose: (intent.subject ?? intent.query).slice(0, 500),
+          budget: `${(amount / 100).toFixed(2)} ${currency.toUpperCase()}`,
+        },
       },
       { idempotencyKey: intentId },
     );
