@@ -1,11 +1,11 @@
 /**
- * E2E: Telegram approval → Stripe Issuing checkout
+ * E2E: Telegram approval -> Stripe Issuing checkout
  *
- * Simulates what OpenClaw does end-to-end — without a real agent:
+ * Simulates what OpenClaw does end-to-end -- without a real agent:
  *
  *  1. Create a test user linked to TELEGRAM_TEST_CHAT_ID
  *  2. Create a purchase intent (seeded into QUOTED state)
- *  3. Transition to AWAITING_APPROVAL + send a REAL Telegram approval request
+ *  3. Transition to AWAITING_APPROVAL + send a Telegram approval request
  *  4. Wait up to 60 s for the user to tap "Approve" in Telegram
  *     (requires: npm run dev + Telegram webhook via ngrok pointing to localhost:3000)
  *  5. If no approval received, auto-approve after the timeout
@@ -15,9 +15,13 @@
  *  9. Finalize the intent + settle the ledger
  * 10. Assert: status = DONE, pot SETTLED, balance arithmetic correct
  *
+ * When TELEGRAM_MOCK=true (or TELEGRAM_BOT_TOKEN is not set):
+ *   - The mock bot is used instead of real Telegram API calls
+ *   - Step 4 is skipped entirely (no 60 s wait)
+ *   - The test auto-approves immediately and asserts mock calls were recorded
+ *
  * Requires:
  *   STRIPE_SECRET_KEY=sk_test_*
- *   TELEGRAM_BOT_TOKEN + TELEGRAM_TEST_CHAT_ID
  *
  * Run: npx jest --testPathPattern=telegramApprovalCheckout --forceExit
  */
@@ -35,42 +39,53 @@ import {
 } from '@/orchestrator/intentService';
 import { getStripeClient } from '@/payments/stripeClient';
 import { IntentStatus, ApprovalDecisionType } from '@/contracts';
+import { getTelegramMockCalls, clearTelegramMockCalls } from '@/telegram/mockBot';
 
-// ─── Skip conditions ─────────────────────────────────────────────────────────
+// -- Skip conditions ----------------------------------------------------------
 const hasStripeKey = process.env.STRIPE_SECRET_KEY?.startsWith('sk_test_');
+const isMockMode =
+  process.env.TELEGRAM_MOCK === 'true' || !process.env.TELEGRAM_BOT_TOKEN;
 const hasTelegram =
-  !!process.env.TELEGRAM_BOT_TOKEN && !!process.env.TELEGRAM_TEST_CHAT_ID;
+  isMockMode ||
+  (!!process.env.TELEGRAM_BOT_TOKEN && !!process.env.TELEGRAM_TEST_CHAT_ID);
 
 const testSuite = hasStripeKey && hasTelegram ? describe : describe.skip;
 
-if (!hasStripeKey) console.warn('⚠️  Skipped: STRIPE_SECRET_KEY must be sk_test_*');
-if (!hasTelegram)
-  console.warn('⚠️  Skipped: TELEGRAM_BOT_TOKEN and TELEGRAM_TEST_CHAT_ID must be set');
+if (!hasStripeKey) console.warn('Skipped: STRIPE_SECRET_KEY must be sk_test_*');
 
-// ─── Test data ────────────────────────────────────────────────────────────────
+// -- Test data ----------------------------------------------------------------
 const RUN_ID = Date.now();
 const MERCHANT_NAME = 'Amazon DE';
 const TASK = 'Buy a pair of noise-cancelling headphones';
-const MAX_BUDGET = 5000; // €50 in cents
-const CHECKOUT_AMOUNT = 3499; // €34.99 — simulated actual price
+const MAX_BUDGET = 5000; // EUR50 in cents
+const CHECKOUT_AMOUNT = 3499; // EUR34.99 -- simulated actual price
 const CURRENCY = 'eur';
 
-// Telegram approval timeout: 60 s. If the user approves within this window
-// (by tapping "Approve" in the bot message), the test proceeds automatically.
-// If not, the test auto-approves so it can still demonstrate the checkout path.
+// Telegram approval timeout: 60 s (only used in non-mock mode)
 const APPROVAL_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 2_000;
 
-// ─── Teardown ─────────────────────────────────────────────────────────────────
+// Use a synthetic chat ID in mock mode
+const TEST_CHAT_ID = isMockMode
+  ? '999999999'
+  : process.env.TELEGRAM_TEST_CHAT_ID!;
+
+// -- Teardown -----------------------------------------------------------------
 afterAll(async () => {
   await prisma.$disconnect();
   getRedisClient().disconnect();
 });
 
-// ─── Suite ────────────────────────────────────────────────────────────────────
-testSuite('Telegram approval → Stripe Issuing checkout', () => {
+// -- Suite --------------------------------------------------------------------
+testSuite('Telegram approval -> Stripe Issuing checkout', () => {
   let userId: string;
   let intentId: string;
+
+  beforeAll(() => {
+    if (isMockMode) {
+      clearTelegramMockCalls();
+    }
+  });
 
   afterAll(async () => {
     await prisma.virtualCard.deleteMany({ where: { intentId } });
@@ -82,21 +97,21 @@ testSuite('Telegram approval → Stripe Issuing checkout', () => {
     await prisma.user.deleteMany({ where: { id: userId } });
   });
 
-  // ─── Step 1 — Create test user ──────────────────────────────────────────────
+  // -- Step 1 -- Create test user ---------------------------------------------
   it('creates a test user linked to the Telegram chat', async () => {
     const user = await prisma.user.create({
       data: {
         email: `tg-checkout-${RUN_ID}@example.com`,
-        telegramChatId: process.env.TELEGRAM_TEST_CHAT_ID!,
-        mainBalance: 1_000_000, // €10 000
+        telegramChatId: TEST_CHAT_ID,
+        mainBalance: 1_000_000, // EUR10 000
         maxBudgetPerIntent: 500_000,
       },
     });
     userId = user.id;
-    expect(user.telegramChatId).toBe(process.env.TELEGRAM_TEST_CHAT_ID);
+    expect(user.telegramChatId).toBe(TEST_CHAT_ID);
   });
 
-  // ─── Step 2 — Create purchase intent ────────────────────────────────────────
+  // -- Step 2 -- Create purchase intent ---------------------------------------
   it('creates a purchase intent in QUOTED state', async () => {
     const intent = await prisma.purchaseIntent.create({
       data: {
@@ -121,27 +136,52 @@ testSuite('Telegram approval → Stripe Issuing checkout', () => {
     expect(intent.status).toBe(IntentStatus.QUOTED);
   });
 
-  // ─── Step 3 — Request approval + send Telegram notification ─────────────────
-  it('transitions to AWAITING_APPROVAL and sends a real Telegram message', async () => {
+  // -- Step 3 -- Request approval + send Telegram notification ----------------
+  it('transitions to AWAITING_APPROVAL and sends a Telegram message', async () => {
     await requestApproval(intentId);
 
     const intent = await prisma.purchaseIntent.findUniqueOrThrow({ where: { id: intentId } });
     expect(intent.status).toBe(IntentStatus.AWAITING_APPROVAL);
 
-    // Send the real Telegram approval request (fire-and-forget, non-throwing)
+    // Send the Telegram approval request (uses mock bot in mock mode)
     await sendApprovalRequest(intentId);
 
-    console.log(
-      `\n📱 Telegram approval request sent!\n` +
-        `   Tap "Approve" in your bot within ${APPROVAL_TIMEOUT_MS / 1000}s.\n` +
-        `   (If not approved in time, the test will auto-approve.)\n`,
-    );
+    if (isMockMode) {
+      // Verify the mock bot recorded a sendMessage call
+      const mockCalls = getTelegramMockCalls();
+      const sendCalls = mockCalls.filter((c) => c.method === 'sendMessage');
+      expect(sendCalls.length).toBeGreaterThanOrEqual(1);
+      expect(sendCalls[0].args[0]).toBe(TEST_CHAT_ID);
+      console.log(
+        `[mock] Telegram notification recorded (${sendCalls.length} sendMessage call(s))`,
+      );
+    } else {
+      console.log(
+        `\nTelegram approval request sent!\n` +
+          `   Tap "Approve" in your bot within ${APPROVAL_TIMEOUT_MS / 1000}s.\n` +
+          `   (If not approved in time, the test will auto-approve.)\n`,
+      );
+    }
   });
 
-  // ─── Step 4 — Wait for Telegram approval (or auto-approve) ──────────────────
+  // -- Step 4 -- Wait for Telegram approval (or auto-approve) -----------------
   it(
     'waits for user approval (or auto-approves after timeout)',
     async () => {
+      if (isMockMode) {
+        // Mock mode: skip the 60 s wait and auto-approve immediately
+        await recordDecision(intentId, ApprovalDecisionType.APPROVED, 'test-mock-approve');
+        await reserveForIntent(userId, intentId, MAX_BUDGET);
+        await issueVirtualCard(intentId, MAX_BUDGET, CURRENCY);
+        await markCardIssued(intentId);
+        await startCheckout(intentId);
+
+        const intent = await prisma.purchaseIntent.findUniqueOrThrow({ where: { id: intentId } });
+        expect([IntentStatus.CARD_ISSUED, IntentStatus.CHECKOUT_RUNNING]).toContain(intent.status);
+        return;
+      }
+
+      // Real Telegram mode: poll for approval
       const deadline = Date.now() + APPROVAL_TIMEOUT_MS;
       let telegramApproved = false;
       let currentStatus: IntentStatus = IntentStatus.AWAITING_APPROVAL;
@@ -152,10 +192,9 @@ testSuite('Telegram approval → Stripe Issuing checkout', () => {
         currentStatus = intent.status as IntentStatus;
 
         if (currentStatus === IntentStatus.APPROVED) {
-          // User approved via Telegram; server is still issuing the card — keep polling
           if (!telegramApproved) {
             telegramApproved = true;
-            console.log('✅ Approved via Telegram! Waiting for card to be issued...');
+            console.log('Approved via Telegram! Waiting for card to be issued...');
           }
           continue;
         }
@@ -164,14 +203,13 @@ testSuite('Telegram approval → Stripe Issuing checkout', () => {
           currentStatus === IntentStatus.CARD_ISSUED ||
           currentStatus === IntentStatus.CHECKOUT_RUNNING
         ) {
-          console.log(`💳 Card issued! Intent status: ${currentStatus}`);
+          console.log(`Card issued! Intent status: ${currentStatus}`);
           break;
         }
       }
 
       if (!telegramApproved && currentStatus === IntentStatus.AWAITING_APPROVAL) {
-        // No Telegram approval received within the timeout — auto-approve
-        console.log('⏱  Timeout — auto-approving and continuing...');
+        console.log('Timeout -- auto-approving and continuing...');
         await recordDecision(intentId, ApprovalDecisionType.APPROVED, 'test-auto-approve');
         await reserveForIntent(userId, intentId, MAX_BUDGET);
         await issueVirtualCard(intentId, MAX_BUDGET, CURRENCY);
@@ -179,9 +217,7 @@ testSuite('Telegram approval → Stripe Issuing checkout', () => {
         await startCheckout(intentId);
         currentStatus = IntentStatus.CHECKOUT_RUNNING;
       } else if (telegramApproved && currentStatus === IntentStatus.APPROVED) {
-        // Approved via Telegram but card issuance didn't complete within the window
-        // Give the server a few extra seconds
-        console.log('⏳ Card issuance still in progress, waiting 5 s...');
+        console.log('Card issuance still in progress, waiting 5 s...');
         await new Promise((r) => setTimeout(r, 5000));
         const intent = await prisma.purchaseIntent.findUniqueOrThrow({ where: { id: intentId } });
         currentStatus = intent.status as IntentStatus;
@@ -193,10 +229,10 @@ testSuite('Telegram approval → Stripe Issuing checkout', () => {
         IntentStatus.CHECKOUT_RUNNING,
       ]).toContain(intent.status);
     },
-    APPROVAL_TIMEOUT_MS + 30_000,
+    isMockMode ? 30_000 : APPROVAL_TIMEOUT_MS + 30_000,
   );
 
-  // ─── Step 5 — Verify card was issued ────────────────────────────────────────
+  // -- Step 5 -- Verify card was issued ---------------------------------------
   it('has a real Stripe Issuing card in the database', async () => {
     const card = await prisma.virtualCard.findUniqueOrThrow({ where: { intentId } });
     expect(card.stripeCardId).toMatch(/^ic_/);
@@ -208,24 +244,22 @@ testSuite('Telegram approval → Stripe Issuing checkout', () => {
     expect(stripeCard.spending_controls.spending_limits[0].amount).toBe(MAX_BUDGET);
 
     console.log(
-      `💳 Card issued: ${stripeCard.id} (last4: ${stripeCard.last4}, status: ${stripeCard.status})`,
+      `Card issued: ${stripeCard.id} (last4: ${stripeCard.last4}, status: ${stripeCard.status})`,
     );
   });
 
-  // ─── Step 6 — Simulated checkout via Stripe test helpers ────────────────────
+  // -- Step 6 -- Simulated checkout via Stripe test helpers -------------------
   it(
     'creates a real Stripe authorization and captures it (simulated checkout)',
     async () => {
       // Stripe test mode: freshly created individual cardholders need ~3 s to
-      // settle before authorizations are approved (cardholder_verification_required
-      // is returned during the settling window).
-      console.log('⏳ Waiting 3 s for cardholder verification to settle...');
+      // settle before authorizations are approved
+      console.log('Waiting 3 s for cardholder verification to settle...');
       await new Promise((r) => setTimeout(r, 3000));
 
       const card = await prisma.virtualCard.findUniqueOrThrow({ where: { intentId } });
       const stripe = getStripeClient();
 
-      // Create a test authorization for the actual checkout amount
       const auth = await stripe.testHelpers.issuing.authorizations.create({
         card: card.stripeCardId,
         amount: CHECKOUT_AMOUNT,
@@ -236,20 +270,18 @@ testSuite('Telegram approval → Stripe Issuing checkout', () => {
       expect(auth.approved).toBe(true);
       expect(auth.status).toBe('pending');
       console.log(
-        `🛒 Authorization approved: ${auth.id} (€${(CHECKOUT_AMOUNT / 100).toFixed(2)})`,
+        `Authorization approved: ${auth.id} (EUR${(CHECKOUT_AMOUNT / 100).toFixed(2)})`,
       );
 
-      // Capture settles the authorization → creates an issuing_transaction
       const captured = await stripe.testHelpers.issuing.authorizations.capture(auth.id);
       expect(captured.status).toBe('closed');
-      console.log(`✅ Transaction captured. Check Stripe Dashboard → Issuing → Transactions`);
+      console.log(`Transaction captured.`);
     },
     30_000,
   );
 
-  // ─── Step 7 — Finalize intent + settle ledger ────────────────────────────────
+  // -- Step 7 -- Finalize intent + settle ledger ------------------------------
   it('finalizes the intent and settles the ledger', async () => {
-    // Ensure the intent is in CHECKOUT_RUNNING before completing
     const pre = await prisma.purchaseIntent.findUniqueOrThrow({ where: { id: intentId } });
     if (pre.status === IntentStatus.CARD_ISSUED) {
       await startCheckout(intentId);
@@ -261,24 +293,20 @@ testSuite('Telegram approval → Stripe Issuing checkout', () => {
     const intent = await prisma.purchaseIntent.findUniqueOrThrow({ where: { id: intentId } });
     expect(intent.status).toBe(IntentStatus.DONE);
 
-    // Verify the pot is SETTLED and balance arithmetic is correct
     const pot = await prisma.pot.findFirstOrThrow({ where: { intentId } });
     expect(pot.status).toBe('SETTLED');
     expect(pot.settledAmount).toBe(CHECKOUT_AMOUNT);
 
     const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
     const surplus = MAX_BUDGET - CHECKOUT_AMOUNT;
-    // mainBalance = 1_000_000 - MAX_BUDGET (reserved) + CHECKOUT_AMOUNT (settled) + surplus (returned)
-    // = 1_000_000 - MAX_BUDGET + MAX_BUDGET = 1_000_000
-    // Actually: settled returns the surplus automatically
     expect(user.mainBalance).toBe(1_000_000 - CHECKOUT_AMOUNT);
 
     console.log(
-      `\n🎉 Flow complete!\n` +
-        `   Intent: ${intentId} → ${intent.status}\n` +
-        `   Charged: €${(CHECKOUT_AMOUNT / 100).toFixed(2)}\n` +
-        `   Surplus returned: €${(surplus / 100).toFixed(2)}\n` +
-        `   New balance: €${(user.mainBalance / 100).toFixed(2)}\n`,
+      `\nFlow complete!\n` +
+        `   Intent: ${intentId} -> ${intent.status}\n` +
+        `   Charged: EUR${(CHECKOUT_AMOUNT / 100).toFixed(2)}\n` +
+        `   Surplus returned: EUR${(surplus / 100).toFixed(2)}\n` +
+        `   New balance: EUR${(user.mainBalance / 100).toFixed(2)}\n`,
     );
   });
 });
