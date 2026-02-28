@@ -99,11 +99,16 @@ jest.mock('@/telegram/notificationService', () => ({
   sendApprovalRequest: mockSendApprovalRequest,
 }));
 
-// DB
+// DB — user-1 has a pre-hashed API key so userAuthMiddleware can authenticate requests
+import bcrypt from 'bcryptjs';
+const TEST_RAW_KEY = 'test-api-key-for-wiring-tests';
+const TEST_KEY_HASH = bcrypt.hashSync(TEST_RAW_KEY, 10);
+
 const dbUsers: Record<string, any> = {
   'user-1': {
     id: 'user-1', email: 'test@agentpay.dev', mainBalance: 100000,
     maxBudgetPerIntent: 50000, merchantAllowlist: [], mccAllowlist: [],
+    apiKeyHash: TEST_KEY_HASH,
   },
 };
 const dbIntents: Record<string, any> = {};
@@ -115,6 +120,11 @@ jest.mock('@/db/client', () => ({
   prisma: {
     user: {
       findUnique: jest.fn(({ where }: any) => Promise.resolve(dbUsers[where.id] ?? null)),
+      findMany: jest.fn(({ where }: any) => {
+        // userAuthMiddleware queries users with apiKeyHash != null
+        const users = Object.values(dbUsers).filter((u: any) => u.apiKeyHash != null);
+        return Promise.resolve(users);
+      }),
     },
     purchaseIntent: {
       create: jest.fn(({ data }: any) => {
@@ -169,6 +179,8 @@ import { buildApp } from '@/app';
 import type { FastifyInstance } from 'fastify';
 import { IntentStatus } from '@/contracts';
 
+const AUTH_HEADER = `Bearer ${TEST_RAW_KEY}`;
+
 let app: FastifyInstance;
 
 beforeAll(async () => {
@@ -196,8 +208,8 @@ describe('POST /v1/intents wiring', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/v1/intents',
-      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'idem-1' },
-      body: JSON.stringify({ userId: 'user-1', query: 'headphones', maxBudget: 10000, currency: 'gbp' }),
+      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'idem-1', authorization: AUTH_HEADER },
+      body: JSON.stringify({ query: 'headphones', maxBudget: 10000, currency: 'gbp' }),
     });
 
     expect(res.statusCode).toBe(201);
@@ -210,8 +222,8 @@ describe('POST /v1/intents wiring', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/v1/intents',
-      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'idem-2' },
-      body: JSON.stringify({ userId: 'user-1', query: 'Sony headphones', maxBudget: 30000, currency: 'gbp' }),
+      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'idem-2', authorization: AUTH_HEADER },
+      body: JSON.stringify({ query: 'Sony headphones', maxBudget: 30000, currency: 'gbp' }),
     });
 
     expect(res.statusCode).toBe(201);
@@ -230,8 +242,8 @@ describe('POST /v1/intents wiring', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/v1/intents',
-      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'idem-3' },
-      body: JSON.stringify({ userId: 'user-1', query: 'test', maxBudget: 5000, currency: 'gbp' }),
+      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'idem-3', authorization: AUTH_HEADER },
+      body: JSON.stringify({ query: 'test', maxBudget: 5000, currency: 'gbp' }),
     });
 
     expect(res.statusCode).toBe(201);
@@ -317,7 +329,7 @@ describe('POST /v1/approvals/:id/decision wiring — APPROVED', () => {
     await app.inject({
       method: 'POST',
       url: '/v1/approvals/intent-a1/decision',
-      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'appr-1' },
+      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'appr-1', authorization: AUTH_HEADER },
       body: JSON.stringify({ decision: 'APPROVED', actorId: 'user-1', reason: 'looks good' }),
     });
 
@@ -330,7 +342,7 @@ describe('POST /v1/approvals/:id/decision wiring — APPROVED', () => {
     await app.inject({
       method: 'POST',
       url: '/v1/approvals/intent-a2/decision',
-      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'appr-2' },
+      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'appr-2', authorization: AUTH_HEADER },
       body: JSON.stringify({ decision: 'APPROVED', actorId: 'user-1' }),
     });
 
@@ -343,7 +355,7 @@ describe('POST /v1/approvals/:id/decision wiring — APPROVED', () => {
     await app.inject({
       method: 'POST',
       url: '/v1/approvals/intent-a3/decision',
-      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'appr-3' },
+      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'appr-3', authorization: AUTH_HEADER },
       body: JSON.stringify({ decision: 'APPROVED', actorId: 'user-1' }),
     });
 
@@ -356,7 +368,7 @@ describe('POST /v1/approvals/:id/decision wiring — APPROVED', () => {
     await app.inject({
       method: 'POST',
       url: '/v1/approvals/intent-a4/decision',
-      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'appr-4' },
+      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'appr-4', authorization: AUTH_HEADER },
       body: JSON.stringify({ decision: 'APPROVED', actorId: 'user-1' }),
     });
 
@@ -370,7 +382,7 @@ describe('POST /v1/approvals/:id/decision wiring — APPROVED', () => {
     await app.inject({
       method: 'POST',
       url: '/v1/approvals/intent-a5/decision',
-      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'appr-5' },
+      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'appr-5', authorization: AUTH_HEADER },
       body: JSON.stringify({ decision: 'APPROVED', actorId: 'user-1' }),
     });
 
@@ -389,7 +401,7 @@ describe('POST /v1/approvals/:id/decision wiring — APPROVED', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/v1/approvals/intent-a6/decision',
-      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'appr-6' },
+      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'appr-6', authorization: AUTH_HEADER },
       body: JSON.stringify({ decision: 'APPROVED', actorId: 'user-1' }),
     });
 
@@ -406,7 +418,7 @@ describe('POST /v1/approvals/:id/decision wiring — APPROVED', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/v1/approvals/intent-a7/decision',
-      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'appr-7' },
+      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'appr-7', authorization: AUTH_HEADER },
       body: JSON.stringify({ decision: 'APPROVED', actorId: 'user-1' }),
     });
 
@@ -420,7 +432,7 @@ describe('POST /v1/approvals/:id/decision wiring — APPROVED', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/v1/approvals/intent-a8/decision',
-      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'appr-8' },
+      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'appr-8', authorization: AUTH_HEADER },
       body: JSON.stringify({ decision: 'APPROVED', actorId: 'user-1' }),
     });
 
@@ -441,7 +453,7 @@ describe('POST /v1/approvals/:id/decision wiring — DENIED', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/v1/approvals/intent-d1/decision',
-      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'deny-1' },
+      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'deny-1', authorization: AUTH_HEADER },
       body: JSON.stringify({ decision: 'DENIED', actorId: 'user-1', reason: 'too expensive' }),
     });
 
