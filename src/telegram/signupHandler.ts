@@ -1,4 +1,6 @@
 import type { Update } from 'grammy/types';
+import crypto from 'crypto';
+import bcrypt from 'bcryptjs';
 import { prisma } from '@/db/client';
 import { getTelegramBot } from './telegramClient';
 import { getSignupSession, setSignupSession, clearSignupSession } from './sessionStore';
@@ -69,6 +71,9 @@ export async function handleTelegramMessage(update: Update): Promise<void> {
   }
 
   try {
+    const rawKey = crypto.randomBytes(32).toString('hex');
+    const apiKeyHash = await bcrypt.hash(rawKey, 10);
+
     const user = await prisma.user.create({
       data: {
         email,
@@ -76,6 +81,7 @@ export async function handleTelegramMessage(update: Update): Promise<void> {
         agentId: session.agentId,
         mainBalance: 1_000_000, // 10 000 EUR in cents
         maxBudgetPerIntent: 50000,
+        apiKeyHash,
       },
     });
 
@@ -88,7 +94,7 @@ export async function handleTelegramMessage(update: Update): Promise<void> {
 
     await bot.api.sendMessage(
       chatId,
-      "✅ Account created! Your OpenClaw is now linked. You'll receive payment approval requests here.",
+      `Account created! Your OpenClaw is now linked.\n\nYour API key (save it — it won't be shown again):\n\n${rawKey}\n\nYou'll receive payment approval requests here.`,
     );
   } catch (err: any) {
     if (err.code === 'P2002') {
