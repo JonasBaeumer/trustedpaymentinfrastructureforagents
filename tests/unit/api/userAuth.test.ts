@@ -12,6 +12,7 @@ jest.mock('@/db/client', () => ({
   },
 }));
 
+import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import { userAuthMiddleware } from '@/api/middleware/userAuth';
 
@@ -144,5 +145,23 @@ describe('userAuthMiddleware', () => {
 
     expect(reply.status).not.toHaveBeenCalled();
     expect(request.user).toEqual(user2);
+  });
+});
+
+describe('API key generation contract', () => {
+  it('crypto.randomBytes(32).toString("hex") produces a 64-char hex string', () => {
+    const rawKey = crypto.randomBytes(32).toString('hex');
+    expect(rawKey).toHaveLength(64);
+    expect(rawKey).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('bcrypt hash of generated key verifies correctly with bcrypt.compare', async () => {
+    const rawKey = crypto.randomBytes(32).toString('hex');
+    const hash = await bcrypt.hash(rawKey, 10);
+
+    expect(typeof hash).toBe('string');
+    expect(hash).not.toBe(rawKey);
+    expect(await bcrypt.compare(rawKey, hash)).toBe(true);
+    expect(await bcrypt.compare('wrong-key', hash)).toBe(false);
   });
 });
