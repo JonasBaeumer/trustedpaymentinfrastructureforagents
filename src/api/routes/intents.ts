@@ -1,6 +1,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { prisma } from '@/db/client';
 import { idempotencyMiddleware, saveIdempotencyResponse } from '@/api/middleware/idempotency';
+import { userAuthMiddleware } from '@/api/middleware/userAuth';
 import { createIntentSchema } from '@/api/validators/intents';
 import { IntentStatus } from '@/contracts';
 import { startSearching } from '@/orchestrator/intentService';
@@ -9,7 +10,7 @@ import { enqueueSearch } from '@/queue/producers';
 export async function intentRoutes(fastify: FastifyInstance): Promise<void> {
   // POST /v1/intents
   fastify.post('/v1/intents', {
-    preHandler: idempotencyMiddleware,
+    preHandler: [userAuthMiddleware, idempotencyMiddleware],
   }, async (request: FastifyRequest, reply: FastifyReply) => {
     const idempotencyKey = request.headers['x-idempotency-key'] as string;
     if (!idempotencyKey) {
@@ -21,13 +22,9 @@ export async function intentRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.status(400).send({ error: 'Invalid input', details: parsed.error.errors });
     }
 
-    const { userId, query, subject, maxBudget, currency, expiresAt } = parsed.data;
-
-    // Verify user exists
-    const user = await prisma.user.findUnique({ where: { id: userId } });
-    if (!user) {
-      return reply.status(404).send({ error: `User not found: ${userId}` });
-    }
+    const user = (request as any).user;
+    const userId = user.id;
+    const { query, subject, maxBudget, currency, expiresAt } = parsed.data;
 
     const intent = await prisma.purchaseIntent.create({
       data: {
@@ -53,7 +50,9 @@ export async function intentRoutes(fastify: FastifyInstance): Promise<void> {
   });
 
   // GET /v1/intents/:intentId
-  fastify.get('/v1/intents/:intentId', async (request: FastifyRequest<{ Params: { intentId: string } }>, reply: FastifyReply) => {
+  fastify.get('/v1/intents/:intentId', {
+    preHandler: userAuthMiddleware,
+  }, async (request: FastifyRequest<{ Params: { intentId: string } }>, reply: FastifyReply) => {
     const { intentId } = request.params;
     const intent = await prisma.purchaseIntent.findUnique({
       where: { id: intentId },
@@ -62,6 +61,11 @@ export async function intentRoutes(fastify: FastifyInstance): Promise<void> {
 
     if (!intent) {
       return reply.status(404).send({ error: `Intent not found: ${intentId}` });
+    }
+
+    const user = (request as any).user;
+    if (intent.userId !== user.id) {
+      return reply.status(403).send({ error: 'Forbidden: intent does not belong to this user' });
     }
 
     return reply.send({ intent });

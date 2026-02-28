@@ -1,3 +1,17 @@
+import bcrypt from 'bcryptjs';
+
+const RAW_API_KEY = 'test-api-key-for-error-paths';
+let API_KEY_HASH: string;
+const TEST_USER = {
+  id: 'user-err-test',
+  email: 'errtest@agentpay.dev',
+  mainBalance: 100000,
+  maxBudgetPerIntent: 50000,
+  merchantAllowlist: [],
+  mccAllowlist: [],
+  apiKeyHash: '', // populated in beforeAll
+};
+
 jest.mock('@/config/env', () => ({
   env: {
     WORKER_API_KEY: 'test-worker-key',
@@ -27,7 +41,16 @@ const mockDb = {
     count: jest.fn().mockResolvedValue(0),
     findMany: jest.fn().mockResolvedValue([]),
   },
-  user: { findUnique: jest.fn(), update: jest.fn() },
+  user: {
+    findUnique: jest.fn(),
+    findMany: jest.fn(() => {
+      if (TEST_USER.apiKeyHash) {
+        return Promise.resolve([TEST_USER]);
+      }
+      return Promise.resolve([]);
+    }),
+    update: jest.fn(),
+  },
   virtualCard: { findUnique: jest.fn(), update: jest.fn(), create: jest.fn() },
   auditEvent: { create: jest.fn().mockResolvedValue({}), findMany: jest.fn().mockResolvedValue([]) },
   idempotencyRecord: {
@@ -46,8 +69,13 @@ import { buildApp } from '@/app';
 import type { FastifyInstance } from 'fastify';
 
 let app: FastifyInstance;
+let authHeader: string;
 
 beforeAll(async () => {
+  API_KEY_HASH = await bcrypt.hash(RAW_API_KEY, 10);
+  TEST_USER.apiKeyHash = API_KEY_HASH;
+  authHeader = `Bearer ${RAW_API_KEY}`;
+
   app = buildApp();
   await app.ready();
 });
@@ -83,6 +111,36 @@ describe('Auth: X-Worker-Key enforcement', () => {
   });
 });
 
+describe('Auth: user API key enforcement', () => {
+  it('401 on POST /v1/intents without Authorization header', async () => {
+    const res = await app.inject({
+      method: 'POST', url: '/v1/intents',
+      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'noauth-1' },
+      body: JSON.stringify({ query: 'test', maxBudget: 1000 }),
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('401 on GET /v1/intents/:id without Authorization header', async () => {
+    const res = await app.inject({ method: 'GET', url: '/v1/intents/some-id' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('401 on POST /v1/approvals/:id/decision without Authorization header', async () => {
+    const res = await app.inject({
+      method: 'POST', url: '/v1/approvals/i1/decision',
+      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'noauth-2' },
+      body: JSON.stringify({ decision: 'APPROVED', actorId: 'u1' }),
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('401 on GET /v1/users/me without Authorization header', async () => {
+    const res = await app.inject({ method: 'GET', url: '/v1/users/me' });
+    expect(res.statusCode).toBe(401);
+  });
+});
+
 describe('Idempotency replay', () => {
   it('200 with stored body on duplicate key', async () => {
     const stored = { intentId: 'old-id', status: 'RECEIVED' };
@@ -90,8 +148,8 @@ describe('Idempotency replay', () => {
 
     const res = await app.inject({
       method: 'POST', url: '/v1/intents',
-      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'dup' },
-      body: JSON.stringify({ userId: 'u1', query: 'test', maxBudget: 1000 }),
+      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'dup', authorization: authHeader },
+      body: JSON.stringify({ query: 'test', maxBudget: 1000 }),
     });
     expect(res.statusCode).toBe(200);
     expect(JSON.parse(res.body)).toEqual(stored);
@@ -123,10 +181,12 @@ describe('State transition guards', () => {
   });
 
   it('409 when approving non-AWAITING_APPROVAL intent', async () => {
-    mockDb.purchaseIntent.findUnique.mockResolvedValueOnce({ id: 'i1', status: 'DONE' });
+    mockDb.purchaseIntent.findUnique.mockResolvedValueOnce({
+      id: 'i1', status: 'DONE', userId: TEST_USER.id, user: TEST_USER,
+    });
     const res = await app.inject({
       method: 'POST', url: '/v1/approvals/i1/decision',
-      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'err-idem-1' },
+      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'err-idem-1', authorization: authHeader },
       body: JSON.stringify({ decision: 'APPROVED', actorId: 'u1' }),
     });
     expect(res.statusCode).toBe(409);
@@ -147,8 +207,8 @@ describe('Input validation', () => {
   it('400 when X-Idempotency-Key missing on POST /v1/intents', async () => {
     const res = await app.inject({
       method: 'POST', url: '/v1/intents',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ userId: 'u1', query: 'test', maxBudget: 1000 }),
+      headers: { 'content-type': 'application/json', authorization: authHeader },
+      body: JSON.stringify({ query: 'test', maxBudget: 1000 }),
     });
     expect(res.statusCode).toBe(400);
   });
@@ -156,17 +216,17 @@ describe('Input validation', () => {
   it('400 for invalid decision value', async () => {
     const res = await app.inject({
       method: 'POST', url: '/v1/approvals/i1/decision',
-      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'val-1' },
+      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'val-1', authorization: authHeader },
       body: JSON.stringify({ decision: 'MAYBE', actorId: 'u1' }),
     });
     expect(res.statusCode).toBe(400);
   });
 
-  it('400 for missing userId on POST /v1/intents', async () => {
+  it('400 for missing query on POST /v1/intents', async () => {
     const res = await app.inject({
       method: 'POST', url: '/v1/intents',
-      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'val-2' },
-      body: JSON.stringify({ query: 'test', maxBudget: 1000 }),
+      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'val-2', authorization: authHeader },
+      body: JSON.stringify({ maxBudget: 1000 }),
     });
     expect(res.statusCode).toBe(400);
   });
@@ -175,7 +235,10 @@ describe('Input validation', () => {
 describe('Not found', () => {
   it('404 for unknown intent', async () => {
     mockDb.purchaseIntent.findUnique.mockResolvedValueOnce(null);
-    const res = await app.inject({ method: 'GET', url: '/v1/intents/does-not-exist' });
+    const res = await app.inject({
+      method: 'GET', url: '/v1/intents/does-not-exist',
+      headers: { authorization: authHeader },
+    });
     expect(res.statusCode).toBe(404);
   });
 });

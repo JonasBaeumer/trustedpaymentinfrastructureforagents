@@ -49,6 +49,7 @@ model User {
   telegramChatId      String?
   phoneNumber         String?
   agentId             String?         @unique
+  apiKeyHash          String?
   createdAt           DateTime        @default(now())
 
   intents             PurchaseIntent[]

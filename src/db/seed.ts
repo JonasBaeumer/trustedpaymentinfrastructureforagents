@@ -1,4 +1,6 @@
 import 'dotenv/config';
+import crypto from 'crypto';
+import bcrypt from 'bcryptjs';
 import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
@@ -9,17 +11,22 @@ async function main() {
   // on Telegram, then add it to .env. Re-running the seed updates the existing user.
   const telegramChatId = process.env.TELEGRAM_TEST_CHAT_ID || null;
 
+  const rawKey = crypto.randomBytes(32).toString('hex');
+  const apiKeyHash = await bcrypt.hash(rawKey, 10);
+
   const user = await prisma.user.upsert({
     where: { email: 'demo@agentpay.dev' },
     update: {
+      apiKeyHash,
       ...(telegramChatId ? { telegramChatId } : {}),
     },
     create: {
       email: 'demo@agentpay.dev',
-      mainBalance: 100000, // £1000.00 in pence
-      maxBudgetPerIntent: 50000, // £500.00
+      mainBalance: 100000, // €1000.00 in cents
+      maxBudgetPerIntent: 50000, // €500.00
       merchantAllowlist: [],
       mccAllowlist: [],
+      apiKeyHash,
       ...(telegramChatId ? { telegramChatId } : {}),
     },
   });
@@ -29,6 +36,7 @@ async function main() {
     : '(not set — add TELEGRAM_TEST_CHAT_ID to .env and re-run seed to receive Telegram notifications)';
 
   console.log(JSON.stringify({ level: 'info', message: 'Seeded demo user', userId: user.id, email: user.email, telegramChatId: chatIdNote }));
+  console.log(`Demo user API key (save this): ${rawKey}`);
 }
 
 main()

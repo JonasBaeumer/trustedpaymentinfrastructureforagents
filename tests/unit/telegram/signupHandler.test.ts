@@ -145,6 +145,7 @@ describe('email step handling', () => {
           agentId: 'ag_test',
           mainBalance: 1_000_000,
           maxBudgetPerIntent: 50000,
+          apiKeyHash: expect.any(String),
         }),
       }),
     );
@@ -153,7 +154,10 @@ describe('email step handling', () => {
       data: { claimedByUserId: 'user-new' },
     });
     expect(mockClearSession).toHaveBeenCalledWith(chatId);
-    expect(mockSendMessage).toHaveBeenCalledWith(chatId, expect.stringContaining('✅'));
+    expect(mockSendMessage).toHaveBeenCalledWith(
+      chatId,
+      expect.stringContaining('API key'),
+    );
   });
 
   it('normalises email to lowercase', async () => {

@@ -1,14 +1,41 @@
 /**
- * Happy path: full RECEIVED → DONE trace via Fastify inject (no real DB/Redis).
+ * Integration test: API key authentication flow
+ *
+ * Verifies that user-facing routes enforce Bearer token auth,
+ * reject invalid keys, and enforce intent ownership.
+ *
+ * Uses mocked DB (no real Postgres required).
  */
 
 import bcrypt from 'bcryptjs';
 
-// A fixed raw API key and its bcrypt hash (computed once, reused for all tests)
-const RAW_API_KEY = 'test-api-key-for-happy-path-integration';
-let API_KEY_HASH: string;
+const RAW_KEY_USER_A = 'api-key-user-a-for-auth-tests';
+const RAW_KEY_USER_B = 'api-key-user-b-for-auth-tests';
+let HASH_A: string;
+let HASH_B: string;
 
-// Mock env first
+const USER_A = {
+  id: 'user-a',
+  email: 'a@agentpay.dev',
+  mainBalance: 100000,
+  maxBudgetPerIntent: 50000,
+  merchantAllowlist: [],
+  mccAllowlist: [],
+  apiKeyHash: '', // set in beforeAll
+  createdAt: new Date(),
+};
+
+const USER_B = {
+  id: 'user-b',
+  email: 'b@agentpay.dev',
+  mainBalance: 100000,
+  maxBudgetPerIntent: 50000,
+  merchantAllowlist: [],
+  mccAllowlist: [],
+  apiKeyHash: '', // set in beforeAll
+  createdAt: new Date(),
+};
+
 jest.mock('@/config/env', () => ({
   env: {
     WORKER_API_KEY: 'test-worker-key',
@@ -39,7 +66,7 @@ jest.mock('@/payments/stripeClient', () => ({
   }),
 }));
 
-// In-memory store for mock prisma
+// In-memory store
 const store: {
   intents: Record<string, any>;
   users: Record<string, any>;
@@ -64,7 +91,7 @@ jest.mock('@/db/client', () => ({
   prisma: {
     purchaseIntent: {
       create: jest.fn(({ data }: any) => {
-        const intent = { id: `intent-${Date.now()}`, ...data, updatedAt: new Date(), createdAt: new Date() };
+        const intent = { id: `intent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, ...data, updatedAt: new Date(), createdAt: new Date() };
         store.intents[intent.id] = intent;
         return Promise.resolve(intent);
       }),
@@ -225,22 +252,18 @@ import { buildApp } from '@/app';
 import type { FastifyInstance } from 'fastify';
 
 let app: FastifyInstance;
-let intentId: string;
-let authHeader: string;
+let authHeaderA: string;
+let authHeaderB: string;
 
 beforeAll(async () => {
-  // Pre-compute bcrypt hash and seed the demo user with an API key
-  API_KEY_HASH = await bcrypt.hash(RAW_API_KEY, 10);
-  store.users['user-demo'] = {
-    id: 'user-demo',
-    email: 'demo@agentpay.dev',
-    mainBalance: 100000,
-    maxBudgetPerIntent: 50000,
-    merchantAllowlist: [],
-    mccAllowlist: [],
-    apiKeyHash: API_KEY_HASH,
-  };
-  authHeader = `Bearer ${RAW_API_KEY}`;
+  HASH_A = await bcrypt.hash(RAW_KEY_USER_A, 10);
+  HASH_B = await bcrypt.hash(RAW_KEY_USER_B, 10);
+  USER_A.apiKeyHash = HASH_A;
+  USER_B.apiKeyHash = HASH_B;
+  store.users[USER_A.id] = USER_A;
+  store.users[USER_B.id] = USER_B;
+  authHeaderA = `Bearer ${RAW_KEY_USER_A}`;
+  authHeaderB = `Bearer ${RAW_KEY_USER_B}`;
 
   app = buildApp();
   await app.ready();
@@ -250,73 +273,158 @@ afterAll(async () => {
   await app.close();
 });
 
-describe('Happy path: RECEIVED → DONE', () => {
-  it('POST /v1/intents — creates intent', async () => {
+// ─── 1. Unauthenticated access ──────────────────────────────────────────────
+
+describe('Unauthenticated access is rejected', () => {
+  it('POST /v1/intents without Authorization header -> 401', async () => {
     const res = await app.inject({
       method: 'POST',
       url: '/v1/intents',
-      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'hp-idem-1', authorization: authHeader },
-      body: JSON.stringify({ query: 'Sony WH-1000XM5', maxBudget: 30000, currency: 'gbp' }),
+      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'noauth-1' },
+      body: JSON.stringify({ query: 'test item', maxBudget: 1000 }),
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('GET /v1/users/me with no key -> 401', async () => {
+    const res = await app.inject({ method: 'GET', url: '/v1/users/me' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('POST /v1/approvals/:id/decision without auth -> 401', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/approvals/any-intent/decision',
+      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'noauth-2' },
+      body: JSON.stringify({ decision: 'APPROVED', actorId: 'x' }),
+    });
+    expect(res.statusCode).toBe(401);
+  });
+});
+
+// ─── 2. Wrong API key ───────────────────────────────────────────────────────
+
+describe('Wrong API key is rejected', () => {
+  it('POST /v1/intents with wrong key -> 401', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/intents',
+      headers: {
+        'content-type': 'application/json',
+        'x-idempotency-key': 'wrongkey-1',
+        authorization: 'Bearer totally-wrong-key',
+      },
+      body: JSON.stringify({ query: 'test item', maxBudget: 1000 }),
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('GET /v1/users/me with wrong key -> 401', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/users/me',
+      headers: { authorization: 'Bearer totally-wrong-key' },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+});
+
+// ─── 3. Valid key: intent creation and retrieval ────────────────────────────
+
+describe('Authenticated intent creation', () => {
+  let intentId: string;
+
+  it('POST /v1/intents with valid key -> 201, intent created for authenticated user', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/intents',
+      headers: {
+        'content-type': 'application/json',
+        'x-idempotency-key': 'auth-intent-1',
+        authorization: authHeaderA,
+      },
+      body: JSON.stringify({ query: 'Sony WH-1000XM5', maxBudget: 30000, currency: 'eur' }),
     });
     expect(res.statusCode).toBe(201);
     const body = JSON.parse(res.body);
     expect(body.intentId).toBeDefined();
-    intentId = body.intentId;
     expect(body.status).toBe('SEARCHING');
+    intentId = body.intentId;
+
+    // Verify the intent in the store belongs to user A
+    expect(store.intents[intentId].userId).toBe(USER_A.id);
   });
 
-  it('POST /v1/agent/quote — worker posts quote', async () => {
-    const res = await app.inject({
-      method: 'POST',
-      url: '/v1/agent/quote',
-      headers: { 'content-type': 'application/json', 'x-worker-key': 'test-worker-key' },
-      body: JSON.stringify({
-        intentId,
-        merchantName: 'Amazon UK',
-        merchantUrl: 'https://amazon.co.uk/dp/B09XS7JWHH',
-        price: 27999,
-        currency: 'gbp',
-      }),
-    });
-    expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.body).status).toBe('AWAITING_APPROVAL');
-  });
-
-  it('POST /v1/approvals/:id/decision — user approves', async () => {
-    const res = await app.inject({
-      method: 'POST',
-      url: `/v1/approvals/${intentId}/decision`,
-      headers: { 'content-type': 'application/json', 'x-idempotency-key': 'hp-approval-1', authorization: authHeader },
-      body: JSON.stringify({ decision: 'APPROVED', actorId: 'user-demo' }),
-    });
-    expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.body).decision).toBe('APPROVED');
-  });
-
-  it('GET /v1/intents/:intentId — returns intent', async () => {
+  it('GET /v1/intents/:id with valid key for own intent -> 200', async () => {
     const res = await app.inject({
       method: 'GET',
       url: `/v1/intents/${intentId}`,
-      headers: { authorization: authHeader },
+      headers: { authorization: authHeaderA },
     });
     expect(res.statusCode).toBe(200);
     expect(JSON.parse(res.body).intent.id).toBe(intentId);
   });
 
-  it('POST /v1/agent/result — worker posts success', async () => {
+  it('GET /v1/intents/:id with valid key for another user\'s intent -> 403', async () => {
     const res = await app.inject({
-      method: 'POST',
-      url: '/v1/agent/result',
-      headers: { 'content-type': 'application/json', 'x-worker-key': 'test-worker-key' },
-      body: JSON.stringify({ intentId, success: true, actualAmount: 27999, receiptUrl: 'https://amazon.co.uk/receipt/123' }),
+      method: 'GET',
+      url: `/v1/intents/${intentId}`,
+      headers: { authorization: authHeaderB },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+});
+
+// ─── 4. GET /v1/users/me ────────────────────────────────────────────────────
+
+describe('GET /v1/users/me', () => {
+  it('returns correct user profile with valid key', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/users/me',
+      headers: { authorization: authHeaderA },
     });
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.body).status).toBe('DONE');
+    const body = JSON.parse(res.body);
+    expect(body.id).toBe(USER_A.id);
+    expect(body.email).toBe(USER_A.email);
+    expect(body.mainBalance).toBe(USER_A.mainBalance);
+  });
+});
+
+// ─── 5. Approval ownership enforcement ──────────────────────────────────────
+
+describe('Approval ownership enforcement', () => {
+  let intentId: string;
+
+  beforeAll(async () => {
+    // Create an intent owned by user A in AWAITING_APPROVAL state
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/intents',
+      headers: {
+        'content-type': 'application/json',
+        'x-idempotency-key': 'auth-approval-setup',
+        authorization: authHeaderA,
+      },
+      body: JSON.stringify({ query: 'test approval ownership', maxBudget: 5000, currency: 'eur' }),
+    });
+    intentId = JSON.parse(res.body).intentId;
+    // Manually move to AWAITING_APPROVAL
+    store.intents[intentId].status = 'AWAITING_APPROVAL';
   });
 
-  it('GET /health — server is healthy', async () => {
-    const res = await app.inject({ method: 'GET', url: '/health' });
-    expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.body).status).toBe('ok');
+  it('POST /v1/approvals/:id/decision for another user\'s intent -> 403', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/v1/approvals/${intentId}/decision`,
+      headers: {
+        'content-type': 'application/json',
+        'x-idempotency-key': 'auth-approval-403',
+        authorization: authHeaderB,
+      },
+      body: JSON.stringify({ decision: 'APPROVED', actorId: USER_B.id }),
+    });
+    expect(res.statusCode).toBe(403);
   });
 });

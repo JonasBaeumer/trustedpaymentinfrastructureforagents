@@ -1,5 +1,6 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { idempotencyMiddleware, saveIdempotencyResponse } from '@/api/middleware/idempotency';
+import { userAuthMiddleware } from '@/api/middleware/userAuth';
 import { approvalDecisionSchema } from '@/api/validators/approvals';
 import { prisma } from '@/db/client';
 import { ApprovalDecisionType, IntentStatus, InsufficientFundsError } from '@/contracts';
@@ -9,11 +10,9 @@ import { issueVirtualCard } from '@/payments/cardService';
 import { markCardIssued, startCheckout } from '@/orchestrator/intentService';
 import { enqueueCheckout } from '@/queue/producers';
 
-// TODO: add user auth
-
 export async function approvalRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.post('/v1/approvals/:intentId/decision', {
-    preHandler: idempotencyMiddleware,
+    preHandler: [userAuthMiddleware, idempotencyMiddleware],
   }, async (request: FastifyRequest<{ Params: { intentId: string } }>, reply: FastifyReply) => {
     const idempotencyKey = request.headers['x-idempotency-key'] as string;
     if (!idempotencyKey) {
@@ -33,6 +32,12 @@ export async function approvalRoutes(fastify: FastifyInstance): Promise<void> {
     if (!intent) {
       return reply.status(404).send({ error: `Intent not found: ${intentId}` });
     }
+
+    const authUser = (request as any).user;
+    if (intent.userId !== authUser.id) {
+      return reply.status(403).send({ error: 'Forbidden: intent does not belong to this user' });
+    }
+
     if (intent.status !== IntentStatus.AWAITING_APPROVAL) {
       return reply.status(409).send({ error: `Intent is not in AWAITING_APPROVAL state (current: ${intent.status})` });
     }

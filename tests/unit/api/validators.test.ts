@@ -4,22 +4,22 @@ import { agentQuoteSchema, agentResultSchema } from '@/api/validators/agent';
 
 describe('createIntentSchema', () => {
   it('accepts valid input', () => {
-    const result = createIntentSchema.safeParse({ userId: 'user-1', query: 'buy headphones', maxBudget: 10000 });
+    const result = createIntentSchema.safeParse({ query: 'buy headphones', maxBudget: 10000 });
     expect(result.success).toBe(true);
   });
 
-  it('rejects missing userId', () => {
-    const result = createIntentSchema.safeParse({ query: 'buy headphones', maxBudget: 10000 });
+  it('rejects missing query', () => {
+    const result = createIntentSchema.safeParse({ maxBudget: 10000 });
     expect(result.success).toBe(false);
   });
 
   it('rejects negative maxBudget', () => {
-    const result = createIntentSchema.safeParse({ userId: 'u1', query: 'test', maxBudget: -1 });
+    const result = createIntentSchema.safeParse({ query: 'test', maxBudget: -1 });
     expect(result.success).toBe(false);
   });
 
   it('rejects maxBudget over limit', () => {
-    const result = createIntentSchema.safeParse({ userId: 'u1', query: 'test', maxBudget: 9999999 });
+    const result = createIntentSchema.safeParse({ query: 'test', maxBudget: 9999999 });
     expect(result.success).toBe(false);
   });
 });
