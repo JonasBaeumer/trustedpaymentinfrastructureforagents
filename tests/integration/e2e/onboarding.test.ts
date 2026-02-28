@@ -9,6 +9,8 @@
  * Run: npm run test:integration -- --testPathPattern=onboarding
  */
 
+import crypto from 'crypto';
+import bcrypt from 'bcryptjs';
 import { prisma } from '@/db/client';
 import { getRedisClient } from '@/config/redis';
 
@@ -142,8 +144,8 @@ testSuite('OpenClaw onboarding + first purchase intent (real DB + Redis)', () =>
     // Wait for fire-and-forget DB write + Telegram API call to complete
     await new Promise((r) => setTimeout(r, 300));
 
-    // Bot should have confirmed account creation
-    expect(mockSendMessage).toHaveBeenLastCalledWith(chatId, expect.stringContaining('✅'));
+    // Bot should have confirmed account creation (message includes API key)
+    expect(mockSendMessage).toHaveBeenLastCalledWith(chatId, expect.stringContaining('Account created'));
 
     // Verify user exists in DB with correct fields
     const user = await prisma.user.findUnique({ where: { email: testEmail } });
@@ -166,19 +168,20 @@ testSuite('OpenClaw onboarding + first purchase intent (real DB + Redis)', () =>
     expect(claimedStatus).toBe('claimed');
     expect(userId).toBe(user!.id);
 
-    // Top up user balance so intent creation succeeds (budget reservation happens at approval time)
+    // Top up user balance and set API key so intent creation succeeds
+    const rawKey = crypto.randomBytes(32).toString('hex');
+    const apiKeyHash = await bcrypt.hash(rawKey, 10);
     await prisma.user.update({
       where: { id: userId },
-      data: { mainBalance: 50000 },
+      data: { mainBalance: 50000, apiKeyHash },
     });
 
-    // Step 6: OpenClaw creates a purchase intent using the newly registered userId
+    // Step 6: User creates a purchase intent via authenticated API
     const intentRes = await app.inject({
       method: 'POST',
       url: '/v1/intents',
-      headers: { 'x-idempotency-key': `onboarding-intent-${Date.now()}` },
+      headers: { 'x-idempotency-key': `onboarding-intent-${Date.now()}`, authorization: `Bearer ${rawKey}` },
       payload: {
-        userId,
         query: 'Sony WH-1000XM5 headphones',
         subject: 'Buy Sony headphones',
         maxBudget: 30000,
