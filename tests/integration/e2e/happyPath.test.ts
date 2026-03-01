@@ -89,7 +89,14 @@ jest.mock('@/db/client', () => ({
       findMany: jest.fn().mockResolvedValue([]),
     },
     user: {
-      findUnique: jest.fn(({ where }: any) => Promise.resolve(store.users[where.id] ?? null)),
+      findUnique: jest.fn(({ where }: any) => {
+        if (where.id) return Promise.resolve(store.users[where.id] ?? null);
+        if (where.apiKeyPrefix) {
+          const match = Object.values(store.users).find((u: any) => u.apiKeyPrefix === where.apiKeyPrefix);
+          return Promise.resolve(match ?? null);
+        }
+        return Promise.resolve(null);
+      }),
       findMany: jest.fn(({ where }: any) => {
         const all = Object.values(store.users);
         if (where?.apiKeyHash?.not === null) {
@@ -239,6 +246,7 @@ beforeAll(async () => {
     merchantAllowlist: [],
     mccAllowlist: [],
     apiKeyHash: API_KEY_HASH,
+    apiKeyPrefix: RAW_API_KEY.slice(0, 16),
   };
   authHeader = `Bearer ${RAW_API_KEY}`;
 

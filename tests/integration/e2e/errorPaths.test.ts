@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs';
 
 const RAW_API_KEY = 'test-api-key-for-error-paths';
 let API_KEY_HASH: string;
-const TEST_USER = {
+const TEST_USER: Record<string, any> = {
   id: 'user-err-test',
   email: 'errtest@agentpay.dev',
   mainBalance: 100000,
@@ -10,6 +10,7 @@ const TEST_USER = {
   merchantAllowlist: [],
   mccAllowlist: [],
   apiKeyHash: '', // populated in beforeAll
+  apiKeyPrefix: '', // populated in beforeAll
 };
 
 jest.mock('@/config/env', () => ({
@@ -42,7 +43,11 @@ const mockDb = {
     findMany: jest.fn().mockResolvedValue([]),
   },
   user: {
-    findUnique: jest.fn(),
+    findUnique: jest.fn(({ where }: any) => {
+      if (where?.id === TEST_USER.id) return Promise.resolve(TEST_USER);
+      if (where?.apiKeyPrefix && where.apiKeyPrefix === TEST_USER.apiKeyPrefix) return Promise.resolve(TEST_USER);
+      return Promise.resolve(null);
+    }),
     findMany: jest.fn(() => {
       if (TEST_USER.apiKeyHash) {
         return Promise.resolve([TEST_USER]);
@@ -74,6 +79,7 @@ let authHeader: string;
 beforeAll(async () => {
   API_KEY_HASH = await bcrypt.hash(RAW_API_KEY, 10);
   TEST_USER.apiKeyHash = API_KEY_HASH;
+  TEST_USER.apiKeyPrefix = RAW_API_KEY.slice(0, 16);
   authHeader = `Bearer ${RAW_API_KEY}`;
 
   app = buildApp();

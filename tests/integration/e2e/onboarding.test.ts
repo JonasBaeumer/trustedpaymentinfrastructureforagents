@@ -173,7 +173,7 @@ testSuite('OpenClaw onboarding + first purchase intent (real DB + Redis)', () =>
     const apiKeyHash = await bcrypt.hash(rawKey, 10);
     await prisma.user.update({
       where: { id: userId },
-      data: { mainBalance: 50000, apiKeyHash },
+      data: { mainBalance: 50000, apiKeyHash, apiKeyPrefix: rawKey.slice(0, 16) },
     });
 
     // Step 6: User creates a purchase intent via authenticated API
