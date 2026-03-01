@@ -211,6 +211,28 @@ beforeEach(() => {
   Object.keys(dbPairingCodes).forEach((k) => delete dbPairingCodes[k]);
 });
 
+// ─── POST /v1/webhooks/stripe ─────────────────────────────────────────────────
+
+describe('POST /v1/webhooks/stripe wiring', () => {
+  it('calls handleWebhookEvent with raw body (Buffer) and signature', async () => {
+    mockPaymentProvider.handleWebhookEvent.mockClear();
+    const payload = JSON.stringify({ type: 'issuing_authorization.created' });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/webhooks/stripe',
+      headers: { 'content-type': 'application/json', 'stripe-signature': 'sig-test' },
+      body: payload,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({ received: true });
+    expect(mockPaymentProvider.handleWebhookEvent).toHaveBeenCalledTimes(1);
+    const [bodyArg, sigArg] = mockPaymentProvider.handleWebhookEvent.mock.calls[0];
+    expect(Buffer.isBuffer(bodyArg)).toBe(true);
+    expect(bodyArg?.toString()).toBe(payload);
+    expect(sigArg).toBe('sig-test');
+  });
+});
+
 // ─── POST /v1/intents ─────────────────────────────────────────────────────────
 
 describe('POST /v1/intents wiring', () => {

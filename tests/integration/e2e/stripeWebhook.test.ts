@@ -17,7 +17,7 @@ jest.mock('@/db/client', () => ({
   },
 }));
 
-jest.mock('@/payments/stripeClient', () => ({
+jest.mock('@/payments/providers/stripe/stripeClient', () => ({
   getStripeClient: () => ({
     webhooks: { constructEvent: jest.fn() },
     issuing: { authorizations: { approve: jest.fn().mockResolvedValue({}) } },

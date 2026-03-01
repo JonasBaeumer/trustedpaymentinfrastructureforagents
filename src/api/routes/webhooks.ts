@@ -2,6 +2,7 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { getPaymentProvider } from '@/payments';
 
 export async function webhookRoutes(fastify: FastifyInstance): Promise<void> {
+  // Raw body is preserved for this path by app's content-type parser (required for Stripe signature verification).
   fastify.post('/v1/webhooks/stripe', async (request: FastifyRequest, reply: FastifyReply) => {
     const signature = request.headers['stripe-signature'] as string;
     if (!signature) {
