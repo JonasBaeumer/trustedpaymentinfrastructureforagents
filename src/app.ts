@@ -47,15 +47,15 @@ export function buildApp() {
         return (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() ?? req.ip ?? 'unknown';
       },
       errorResponseBuilder: (_req, context) => ({
+        statusCode: 429,
         error: 'rate_limit_exceeded',
         message: `Too many requests. Please retry after ${context.after}.`,
         retryAfter: context.ttl / 1000,
       }),
-      addHeadersOnExceeded: {
+      addHeadersOnExceeding: {
         'x-ratelimit-limit': true,
         'x-ratelimit-remaining': true,
         'x-ratelimit-reset': true,
-        'retry-after': true,
       },
       addHeaders: {
         'x-ratelimit-limit': true,
@@ -66,17 +66,21 @@ export function buildApp() {
     });
   }
 
-  // Register routes
-  fastify.register(intentRoutes);
-  fastify.register(approvalRoutes);
-  fastify.register(agentRoutes);
-  fastify.register(webhookRoutes);
-  fastify.register(debugRoutes);
-  fastify.register(telegramRoutes);
-  fastify.register(checkoutRoutes);
-  fastify.register(usersRoutes);
+  // Use after() to ensure the rate-limit plugin is loaded before routes are registered,
+  // so the global onRoute hook applies to all routes including /health.
+  fastify.after(() => {
+    // Register routes
+    fastify.register(intentRoutes);
+    fastify.register(approvalRoutes);
+    fastify.register(agentRoutes);
+    fastify.register(webhookRoutes);
+    fastify.register(debugRoutes);
+    fastify.register(telegramRoutes);
+    fastify.register(checkoutRoutes);
+    fastify.register(usersRoutes);
 
-  fastify.get('/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }));
+    fastify.get('/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }));
+  });
 
   return fastify;
 }
