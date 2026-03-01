@@ -34,6 +34,23 @@ jest.mock('@/payments/stripeClient', () => ({
   getStripeClient: () => ({ webhooks: { constructEvent: jest.fn() } }),
 }));
 
+const mockRevealCard = jest.fn().mockResolvedValue({
+  number: '4242424242424242', cvc: '123', expMonth: 12, expYear: 2027, last4: '4242',
+});
+const mockCancelCard = jest.fn().mockResolvedValue(undefined);
+const mockIssueCard = jest.fn().mockResolvedValue({
+  id: 'vc-1', intentId: 'i1', stripeCardId: 'ic_test', last4: '4242',
+});
+jest.mock('@/payments', () => ({
+  getPaymentProvider: () => ({
+    issueCard: mockIssueCard,
+    revealCard: mockRevealCard,
+    freezeCard: jest.fn().mockResolvedValue(undefined),
+    cancelCard: mockCancelCard,
+    handleWebhookEvent: jest.fn().mockResolvedValue(undefined),
+  }),
+}));
+
 const mockDb = {
   purchaseIntent: {
     create: jest.fn(),
@@ -164,9 +181,8 @@ describe('Idempotency replay', () => {
 
 describe('Card reveal enforcement', () => {
   it('409 on second card reveal', async () => {
-    mockDb.virtualCard.findUnique.mockResolvedValueOnce({
-      intentId: 'i1', stripeCardId: 'ic_1', last4: '4242', revealedAt: new Date(),
-    });
+    const { CardAlreadyRevealedError } = require('@/contracts');
+    mockRevealCard.mockRejectedValueOnce(new CardAlreadyRevealedError('i1'));
     const res = await app.inject({
       method: 'GET', url: '/v1/agent/card/i1',
       headers: { 'x-worker-key': 'test-worker-key' },
