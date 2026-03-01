@@ -3,7 +3,7 @@ import { idempotencyMiddleware, saveIdempotencyResponse } from '@/api/middleware
 import { userAuthMiddleware } from '@/api/middleware/userAuth';
 import { approvalDecisionSchema } from '@/api/validators/approvals';
 import { prisma } from '@/db/client';
-import { ApprovalDecisionType, IntentStatus, InsufficientFundsError } from '@/contracts';
+import { ApprovalDecisionType, IntentStatus, InsufficientFundsError, InsufficientIssuingBalanceError } from '@/contracts';
 import { recordDecision } from '@/approval/approvalService';
 import { reserveForIntent, returnIntent } from '@/ledger/potService';
 import { getPaymentProvider } from '@/payments';
@@ -67,12 +67,18 @@ export async function approvalRoutes(fastify: FastifyInstance): Promise<void> {
       if (decisionType === ApprovalDecisionType.APPROVED) {
         const metadata = intent.metadata as Record<string, unknown>;
 
-        // 2. Reserve funds in ledger pot (deducts from user.mainBalance)
+        // 2. Check Stripe Issuing balance covers the requested amount
+        const issuingBalance = await getPaymentProvider().getIssuingBalance(intent.currency);
+        if (issuingBalance.available < intent.maxBudget) {
+          throw new InsufficientIssuingBalanceError(issuingBalance.available, intent.maxBudget, intent.currency);
+        }
+
+        // 3. Reserve funds in ledger pot (deducts from user.mainBalance)
         await reserveForIntent(intent.userId, intentId, intent.maxBudget);
 
         let card;
         try {
-          // 3. Issue restricted Stripe virtual card
+          // 4. Issue restricted Stripe virtual card
           card = await getPaymentProvider().issueCard(intentId, intent.maxBudget, intent.currency, {
             mccAllowlist: intent.user.mccAllowlist,
           });
@@ -82,13 +88,13 @@ export async function approvalRoutes(fastify: FastifyInstance): Promise<void> {
           throw cardErr;
         }
 
-        // 4. Transition APPROVED → CARD_ISSUED (via orchestrator)
+        // 5. Transition APPROVED → CARD_ISSUED (via orchestrator)
         await markCardIssued(intentId);
 
-        // 5. Transition CARD_ISSUED → CHECKOUT_RUNNING
+        // 6. Transition CARD_ISSUED → CHECKOUT_RUNNING
         await startCheckout(intentId);
 
-        // 6. Enqueue checkout job for the worker
+        // 7. Enqueue checkout job for the worker
         await enqueueCheckout(intentId, {
           intentId,
           userId: intent.userId,
@@ -110,7 +116,7 @@ export async function approvalRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.send(responseBody);
 
     } catch (err) {
-      if (err instanceof InsufficientFundsError) {
+      if (err instanceof InsufficientFundsError || err instanceof InsufficientIssuingBalanceError) {
         return reply.status(422).send({ error: err.message });
       }
       throw err;
