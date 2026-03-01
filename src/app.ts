@@ -15,17 +15,21 @@ export function buildApp() {
     },
   });
 
-  // Register raw body parser for Stripe webhooks BEFORE other parsers
+  // Register content-type parser: for Stripe webhook path pass raw buffer (required for
+  // signature verification); for all other application/json parse as JSON.
   fastify.addContentTypeParser(
     'application/json',
     { parseAs: 'buffer' },
     (req, body, done) => {
-      try {
-        const parsed = JSON.parse(body.toString());
-        done(null, parsed);
-      } catch (err) {
-        // For webhook route, pass raw buffer
+      const path = req.url?.split('?')[0];
+      if (path === '/v1/webhooks/stripe') {
         done(null, body);
+        return;
+      }
+      try {
+        done(null, JSON.parse(body.toString()));
+      } catch (err) {
+        done(err as Error, undefined);
       }
     }
   );
