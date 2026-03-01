@@ -1,15 +1,9 @@
-import {
-  MockPaymentProvider,
-  getMockProviderCalls,
-  clearMockProviderCalls,
-} from '@/payments/providers/mock/mockProvider';
-import { VirtualCardData, CardReveal } from '@/contracts';
+import { MockPaymentProvider } from '@/payments/providers/mock/mockProvider';
 
 describe('MockPaymentProvider', () => {
   let provider: MockPaymentProvider;
 
   beforeEach(() => {
-    clearMockProviderCalls();
     provider = new MockPaymentProvider();
   });
 
@@ -32,7 +26,7 @@ describe('MockPaymentProvider', () => {
     it('passes options through to call recording', async () => {
       await provider.issueCard('intent-2', 10000, 'gbp', { mccAllowlist: ['5411'] });
 
-      const calls = getMockProviderCalls();
+      const calls = provider.getCalls();
       expect(calls).toHaveLength(1);
       expect(calls[0].method).toBe('issueCard');
       expect(calls[0].args).toEqual(['intent-2', 10000, 'gbp', { mccAllowlist: ['5411'] }]);
@@ -55,7 +49,7 @@ describe('MockPaymentProvider', () => {
     it('records the call', async () => {
       await provider.revealCard('intent-3');
 
-      const calls = getMockProviderCalls();
+      const calls = provider.getCalls();
       expect(calls).toHaveLength(1);
       expect(calls[0].method).toBe('revealCard');
       expect(calls[0].args).toEqual(['intent-3']);
@@ -70,7 +64,7 @@ describe('MockPaymentProvider', () => {
     it('records the call', async () => {
       await provider.freezeCard('intent-4');
 
-      const calls = getMockProviderCalls();
+      const calls = provider.getCalls();
       expect(calls).toHaveLength(1);
       expect(calls[0].method).toBe('freezeCard');
       expect(calls[0].args).toEqual(['intent-4']);
@@ -85,7 +79,7 @@ describe('MockPaymentProvider', () => {
     it('records the call', async () => {
       await provider.cancelCard('intent-5');
 
-      const calls = getMockProviderCalls();
+      const calls = provider.getCalls();
       expect(calls).toHaveLength(1);
       expect(calls[0].method).toBe('cancelCard');
       expect(calls[0].args).toEqual(['intent-5']);
@@ -101,7 +95,7 @@ describe('MockPaymentProvider', () => {
       const body = Buffer.from('{"type":"test"}');
       await provider.handleWebhookEvent(body, 'whsec_test');
 
-      const calls = getMockProviderCalls();
+      const calls = provider.getCalls();
       expect(calls).toHaveLength(1);
       expect(calls[0].method).toBe('handleWebhookEvent');
       expect(calls[0].args).toEqual([body, 'whsec_test']);
@@ -114,7 +108,7 @@ describe('MockPaymentProvider', () => {
       await provider.revealCard('i1');
       await provider.cancelCard('i1');
 
-      const calls = getMockProviderCalls();
+      const calls = provider.getCalls();
       expect(calls).toHaveLength(3);
       expect(calls.map((c) => c.method)).toEqual(['issueCard', 'revealCard', 'cancelCard']);
     });
@@ -124,29 +118,40 @@ describe('MockPaymentProvider', () => {
       await provider.issueCard('i1', 1000, 'eur');
       const after = Date.now();
 
-      const calls = getMockProviderCalls();
+      const calls = provider.getCalls();
       expect(calls[0].timestamp).toBeGreaterThanOrEqual(before);
       expect(calls[0].timestamp).toBeLessThanOrEqual(after);
     });
 
-    it('returns a copy — mutations do not affect internal state', async () => {
+    it('getCalls() returns a copy — mutations do not affect internal state', async () => {
       await provider.issueCard('i1', 1000, 'eur');
 
-      const calls = getMockProviderCalls();
+      const calls = provider.getCalls();
       calls.length = 0;
 
-      expect(getMockProviderCalls()).toHaveLength(1);
+      expect(provider.getCalls()).toHaveLength(1);
+    });
+
+    it('two instances have independent call logs', async () => {
+      const other = new MockPaymentProvider();
+      await provider.issueCard('i1', 1000, 'eur');
+      await other.freezeCard('i2');
+
+      expect(provider.getCalls()).toHaveLength(1);
+      expect(other.getCalls()).toHaveLength(1);
+      expect(provider.getCalls()[0].method).toBe('issueCard');
+      expect(other.getCalls()[0].method).toBe('freezeCard');
     });
   });
 
-  describe('clearMockProviderCalls', () => {
+  describe('clearCalls', () => {
     it('removes all recorded calls', async () => {
       await provider.issueCard('i1', 1000, 'eur');
       await provider.revealCard('i1');
-      expect(getMockProviderCalls()).toHaveLength(2);
+      expect(provider.getCalls()).toHaveLength(2);
 
-      clearMockProviderCalls();
-      expect(getMockProviderCalls()).toHaveLength(0);
+      provider.clearCalls();
+      expect(provider.getCalls()).toHaveLength(0);
     });
   });
 });
