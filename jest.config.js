@@ -13,4 +13,9 @@ module.exports = {
       diagnostics: false,
     }],
   },
+  // Always mock Telegram in every jest run — prevents accidental real API calls
+  // regardless of how jest is invoked (npm script, npx jest, IDE test runner, etc.)
+  testEnvironmentOptions: {},
+  globalSetup: undefined,
+  setupFiles: ['<rootDir>/tests/setup.ts'],
 };
