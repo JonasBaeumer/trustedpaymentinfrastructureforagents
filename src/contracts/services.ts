@@ -17,6 +17,14 @@ export interface ICardService {
   cancelCard(intentId: string): Promise<void>;
 }
 
+export interface IPaymentProvider {
+  issueCard(intentId: string, amount: number, currency: string, options?: { mccAllowlist?: string[] }): Promise<VirtualCardData>;
+  revealCard(intentId: string): Promise<CardReveal>;
+  freezeCard(intentId: string): Promise<void>;
+  cancelCard(intentId: string): Promise<void>;
+  handleWebhookEvent(rawBody: Buffer | string, signature: string): Promise<void>;
+}
+
 export interface IApprovalService {
   requestApproval(intentId: string): Promise<void>;
   recordDecision(intentId: string, decision: ApprovalDecisionType, actorId: string, reason?: string): Promise<ApprovalDecisionData>;

@@ -3,7 +3,7 @@ import { prisma } from '@/db/client';
 import { ApprovalDecisionType, IntentStatus } from '@/contracts';
 import { recordDecision } from '@/approval/approvalService';
 import { reserveForIntent, returnIntent } from '@/ledger/potService';
-import { issueVirtualCard } from '@/payments/cardService';
+import { getPaymentProvider } from '@/payments';
 import { markCardIssued, startCheckout } from '@/orchestrator/intentService';
 import { enqueueCheckout } from '@/queue/producers';
 import { getTelegramBot } from './telegramClient';
@@ -74,7 +74,7 @@ export async function handleTelegramCallback(update: Update): Promise<void> {
 
       let card;
       try {
-        card = await issueVirtualCard(intentId, intent.maxBudget, intent.currency, {
+        card = await getPaymentProvider().issueCard(intentId, intent.maxBudget, intent.currency, {
           mccAllowlist: intent.user.mccAllowlist,
         });
       } catch (cardErr) {

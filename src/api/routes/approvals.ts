@@ -6,7 +6,7 @@ import { prisma } from '@/db/client';
 import { ApprovalDecisionType, IntentStatus, InsufficientFundsError } from '@/contracts';
 import { recordDecision } from '@/approval/approvalService';
 import { reserveForIntent, returnIntent } from '@/ledger/potService';
-import { issueVirtualCard } from '@/payments/cardService';
+import { getPaymentProvider } from '@/payments';
 import { markCardIssued, startCheckout } from '@/orchestrator/intentService';
 import { enqueueCheckout } from '@/queue/producers';
 
@@ -61,7 +61,7 @@ export async function approvalRoutes(fastify: FastifyInstance): Promise<void> {
         let card;
         try {
           // 3. Issue restricted Stripe virtual card
-          card = await issueVirtualCard(intentId, intent.maxBudget, intent.currency, {
+          card = await getPaymentProvider().issueCard(intentId, intent.maxBudget, intent.currency, {
             mccAllowlist: intent.user.mccAllowlist,
           });
         } catch (cardErr) {
