@@ -7,7 +7,17 @@ import { linkTelegramSchema } from '@/api/validators/telegram';
 
 export async function telegramRoutes(fastify: FastifyInstance): Promise<void> {
   // POST /v1/webhooks/telegram — receives Telegram updates (callback queries)
-  fastify.post('/v1/webhooks/telegram', async (request: FastifyRequest, reply: FastifyReply) => {
+  fastify.post('/v1/webhooks/telegram', {
+    config: {
+      rateLimit: {
+        max: 200,
+        timeWindow: '1 minute',
+        keyGenerator: (req: FastifyRequest) => {
+          return (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() ?? req.ip ?? 'unknown';
+        },
+      },
+    },
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
     const secretToken = request.headers['x-telegram-bot-api-secret-token'];
     if (!env.TELEGRAM_WEBHOOK_SECRET || secretToken !== env.TELEGRAM_WEBHOOK_SECRET) {
       return reply.status(401).send({ error: 'Unauthorized' });

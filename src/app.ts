@@ -1,4 +1,5 @@
 import Fastify from 'fastify';
+import rateLimit from '@fastify/rate-limit';
 import { intentRoutes } from '@/api/routes/intents';
 import { approvalRoutes } from '@/api/routes/approvals';
 import { agentRoutes } from '@/api/routes/agent';
@@ -33,6 +34,37 @@ export function buildApp() {
       }
     }
   );
+
+  // Global rate limit — 60 req/min per IP, Redis-backed in production
+  if (process.env.NODE_ENV !== 'test') {
+    const { getRedisClient } = require('@/config/redis');
+    fastify.register(rateLimit, {
+      global: true,
+      max: 60,
+      timeWindow: '1 minute',
+      redis: getRedisClient(),
+      keyGenerator: (req) => {
+        return (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() ?? req.ip ?? 'unknown';
+      },
+      errorResponseBuilder: (_req, context) => ({
+        error: 'rate_limit_exceeded',
+        message: `Too many requests. Please retry after ${context.after}.`,
+        retryAfter: context.ttl / 1000,
+      }),
+      addHeadersOnExceeded: {
+        'x-ratelimit-limit': true,
+        'x-ratelimit-remaining': true,
+        'x-ratelimit-reset': true,
+        'retry-after': true,
+      },
+      addHeaders: {
+        'x-ratelimit-limit': true,
+        'x-ratelimit-remaining': true,
+        'x-ratelimit-reset': true,
+        'retry-after': true,
+      },
+    });
+  }
 
   // Register routes
   fastify.register(intentRoutes);

@@ -12,6 +12,17 @@ import { enqueueCheckout } from '@/queue/producers';
 
 export async function approvalRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.post('/v1/approvals/:intentId/decision', {
+    config: {
+      rateLimit: {
+        max: 5,
+        timeWindow: '1 minute',
+        keyGenerator: (req: FastifyRequest) => {
+          const auth = req.headers.authorization ?? '';
+          const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() ?? req.ip ?? 'unknown';
+          return `${auth}:${ip}`;
+        },
+      },
+    },
     preHandler: [userAuthMiddleware, idempotencyMiddleware],
   }, async (request: FastifyRequest<{ Params: { intentId: string } }>, reply: FastifyReply) => {
     const idempotencyKey = request.headers['x-idempotency-key'] as string;
