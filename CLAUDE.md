@@ -51,6 +51,7 @@ stripe listen --forward-to localhost:3000/v1/webhooks/stripe
 
 - Telegram manual testing (with and without OpenClaw): `docs/telegram-setup.md`
 - OpenClaw HTTP API reference: `docs/openclaw.md`
+- Do not add Co-Authored-By lines to commit messages.
 
 ## Architecture
 
