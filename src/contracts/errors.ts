@@ -18,3 +18,14 @@ export class InvalidApprovalStateError extends Error {
     this.name = 'InvalidApprovalStateError';
   }
 }
+
+export class InsufficientIssuingBalanceError extends Error {
+  constructor(
+    public readonly available: number,
+    public readonly required: number,
+    public readonly currency: string,
+  ) {
+    super(`Insufficient Stripe Issuing balance: available ${available}, required ${required} (${currency})`);
+    this.name = 'InsufficientIssuingBalanceError';
+  }
+}

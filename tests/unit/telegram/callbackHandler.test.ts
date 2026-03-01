@@ -43,12 +43,14 @@ const mockRevealCard = jest.fn().mockResolvedValue({ number: '4242424242424242',
 const mockFreezeCard = jest.fn().mockResolvedValue(undefined);
 const mockCancelCard = jest.fn().mockResolvedValue(undefined);
 const mockHandleWebhookEvent = jest.fn().mockResolvedValue(undefined);
+const mockGetIssuingBalance = jest.fn().mockResolvedValue({ available: 999_999_99, currency: 'gbp' });
 const mockProvider = {
   issueCard: mockIssueCard,
   revealCard: mockRevealCard,
   freezeCard: mockFreezeCard,
   cancelCard: mockCancelCard,
   handleWebhookEvent: mockHandleWebhookEvent,
+  getIssuingBalance: mockGetIssuingBalance,
 };
 jest.mock('@/payments', () => ({
   getPaymentProvider: () => mockProvider,
@@ -135,10 +137,11 @@ describe('handleTelegramCallback — approve path', () => {
     expect(callOrder[1]).toBe('record');
   });
 
-  it('calls all 6 service functions in correct order', async () => {
+  it('calls all 7 service functions in correct order', async () => {
     seedAwaitingIntent('intent-cb2');
     const order: string[] = [];
     mockRecordDecision.mockImplementation(() => { order.push('recordDecision'); return Promise.resolve({}); });
+    mockGetIssuingBalance.mockImplementation(() => { order.push('getIssuingBalance'); return Promise.resolve({ available: 999_999_99, currency: 'gbp' }); });
     mockReserveForIntent.mockImplementation(() => { order.push('reserveForIntent'); return Promise.resolve({}); });
     mockIssueCard.mockImplementation(() => { order.push('issueCard'); return Promise.resolve({ stripeCardId: 'ic_t', last4: '4242' }); });
     mockMarkCardIssued.mockImplementation(() => { order.push('markCardIssued'); return Promise.resolve({}); });
@@ -149,6 +152,7 @@ describe('handleTelegramCallback — approve path', () => {
 
     expect(order).toEqual([
       'recordDecision',
+      'getIssuingBalance',
       'reserveForIntent',
       'issueCard',
       'markCardIssued',
@@ -218,6 +222,39 @@ describe('handleTelegramCallback — idempotency guard', () => {
     await handleTelegramCallback(makeUpdate('approve', 'intent-idem', 'cb-idem'));
 
     expect(mockRecordDecision).not.toHaveBeenCalled();
+  });
+});
+
+describe('handleTelegramCallback — insufficient Issuing balance', () => {
+  it('does not reserve or issue card when Issuing balance is insufficient', async () => {
+    seedAwaitingIntent('intent-bal1');
+    mockGetIssuingBalance.mockResolvedValueOnce({ available: 500, currency: 'gbp' });
+
+    await handleTelegramCallback(makeUpdate('approve', 'intent-bal1', 'cb-bal1'));
+
+    expect(mockReserveForIntent).not.toHaveBeenCalled();
+    expect(mockIssueCard).not.toHaveBeenCalled();
+    expect(mockEnqueueCheckout).not.toHaveBeenCalled();
+  });
+
+  it('edits message with balance error when insufficient', async () => {
+    seedAwaitingIntent('intent-bal2');
+    mockGetIssuingBalance.mockResolvedValueOnce({ available: 500, currency: 'gbp' });
+
+    await handleTelegramCallback(makeUpdate('approve', 'intent-bal2', 'cb-bal2'));
+
+    expect(mockEditMessageText).toHaveBeenCalledWith(
+      expect.anything(), expect.anything(),
+      expect.stringContaining('Insufficient Stripe Issuing balance'),
+      expect.any(Object),
+    );
+  });
+
+  it('does not re-throw — handles gracefully', async () => {
+    seedAwaitingIntent('intent-bal3');
+    mockGetIssuingBalance.mockResolvedValueOnce({ available: 0, currency: 'gbp' });
+
+    await expect(handleTelegramCallback(makeUpdate('approve', 'intent-bal3', 'cb-bal3'))).resolves.toBeUndefined();
   });
 });
 
