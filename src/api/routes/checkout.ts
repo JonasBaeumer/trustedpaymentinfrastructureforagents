@@ -1,6 +1,6 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { checkoutSimulateSchema } from '@/api/validators/checkout';
-import { runSimulatedCheckout } from '@/payments/checkoutSimulator';
+import { runSimulatedCheckout } from '@/payments/providers/stripe/checkoutSimulator';
 
 export async function checkoutRoutes(fastify: FastifyInstance): Promise<void> {
   // POST /v1/checkout/simulate — simulate a merchant charging a virtual card

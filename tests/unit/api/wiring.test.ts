@@ -14,7 +14,7 @@
 const mockRunSimulatedCheckout = jest.fn().mockResolvedValue({
   success: true, chargeId: 'pi_wiring_test', amount: 5000, currency: 'eur',
 });
-jest.mock('@/payments/checkoutSimulator', () => ({
+jest.mock('@/payments/providers/stripe/checkoutSimulator', () => ({
   runSimulatedCheckout: mockRunSimulatedCheckout,
 }));
 

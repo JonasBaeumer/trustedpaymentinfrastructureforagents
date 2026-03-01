@@ -23,7 +23,7 @@ jest.mock('@/db/client', () => ({
   },
 }));
 
-import { runSimulatedCheckout } from '@/payments/checkoutSimulator';
+import { runSimulatedCheckout } from '@/payments/providers/stripe/checkoutSimulator';
 import { IntentNotFoundError } from '@/contracts';
 
 const CARD_ID = 'ic_test123';

@@ -25,7 +25,7 @@ jest.mock('@/db/client', () => ({ prisma: {} }));
 
 // ─── Mock runSimulatedCheckout ────────────────────────────────────────────────
 const mockRunSimulatedCheckout = jest.fn();
-jest.mock('@/payments/checkoutSimulator', () => ({
+jest.mock('@/payments/providers/stripe/checkoutSimulator', () => ({
   runSimulatedCheckout: mockRunSimulatedCheckout,
 }));
 
