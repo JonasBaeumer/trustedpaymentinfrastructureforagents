@@ -536,7 +536,7 @@ Every purchase is a `PurchaseIntent` tracked through an explicit state machine. 
 
 - **Node.js** 18+
 - **Docker** (for Postgres + Redis)
-- **Stripe account** in test mode — `sk_test_*` key from the Dashboard
+- **Stripe account** with Issuing enabled — see [docs/stripe-setup.md](docs/stripe-setup.md) for the full walkthrough
 - **Telegram bot token** (optional) — for approval notifications and user signup; see [docs/telegram-setup.md](docs/telegram-setup.md)
 
 ### 1. Install and configure
