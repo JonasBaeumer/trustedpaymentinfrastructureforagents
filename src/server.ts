@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { buildApp } from '@/app';
 import { env } from '@/config/env';
+import { validateStripeSetup } from '@/payments/providers/stripe/validateStripe';
 
 async function start() {
   const app = buildApp();
@@ -11,6 +12,8 @@ async function start() {
     console.error(JSON.stringify({ level: 'error', message: 'Server failed to start', error: String(err) }));
     process.exit(1);
   }
+
+  await validateStripeSetup();
 }
 
 start();
