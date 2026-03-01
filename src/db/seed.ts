@@ -13,11 +13,15 @@ async function main() {
 
   const rawKey = crypto.randomBytes(32).toString('hex');
   const apiKeyHash = await bcrypt.hash(rawKey, 10);
+  const apiKeyPrefix = rawKey.slice(0, 16);
+
+  const existing = await prisma.user.findUnique({ where: { email: 'demo@agentpay.dev' } });
 
   const user = await prisma.user.upsert({
     where: { email: 'demo@agentpay.dev' },
     update: {
       apiKeyHash,
+      apiKeyPrefix,
       ...(telegramChatId ? { telegramChatId } : {}),
     },
     create: {
@@ -27,9 +31,14 @@ async function main() {
       merchantAllowlist: [],
       mccAllowlist: [],
       apiKeyHash,
+      apiKeyPrefix,
       ...(telegramChatId ? { telegramChatId } : {}),
     },
   });
+
+  if (existing) {
+    console.warn('WARNING: API key rotated — the previous key is now invalid. Save the new key printed above.');
+  }
 
   const chatIdNote = user.telegramChatId
     ? user.telegramChatId

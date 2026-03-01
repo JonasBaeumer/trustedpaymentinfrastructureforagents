@@ -33,7 +33,7 @@ export async function approvalRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.status(404).send({ error: `Intent not found: ${intentId}` });
     }
 
-    const authUser = (request as any).user;
+    const authUser = request.user!;
     if (intent.userId !== authUser.id) {
       return reply.status(403).send({ error: 'Forbidden: intent does not belong to this user' });
     }
@@ -42,8 +42,9 @@ export async function approvalRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.status(409).send({ error: `Intent is not in AWAITING_APPROVAL state (current: ${intent.status})` });
     }
 
-    const { decision, actorId, reason } = parsed.data;
+    const { decision, reason } = parsed.data;
     const decisionType = decision as ApprovalDecisionType;
+    const actorId = request.user!.id;
 
     try {
       // 1. Record decision — idempotent, transitions intent to APPROVED or DENIED

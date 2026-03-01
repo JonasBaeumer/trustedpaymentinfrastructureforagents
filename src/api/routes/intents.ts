@@ -22,7 +22,7 @@ export async function intentRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.status(400).send({ error: 'Invalid input', details: parsed.error.errors });
     }
 
-    const user = (request as any).user;
+    const user = request.user!;
     const userId = user.id;
     const { query, subject, maxBudget, currency, expiresAt } = parsed.data;
 
@@ -63,7 +63,7 @@ export async function intentRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.status(404).send({ error: `Intent not found: ${intentId}` });
     }
 
-    const user = (request as any).user;
+    const user = request.user!;
     if (intent.userId !== user.id) {
       return reply.status(403).send({ error: 'Forbidden: intent does not belong to this user' });
     }

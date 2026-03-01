@@ -5,10 +5,10 @@
  * Only prisma is mocked.
  */
 
-const mockFindMany = jest.fn();
+const mockFindUnique = jest.fn();
 jest.mock('@/db/client', () => ({
   prisma: {
-    user: { findMany: mockFindMany },
+    user: { findUnique: mockFindUnique },
   },
 }));
 
@@ -24,6 +24,7 @@ function makeRequest(headers: Record<string, string | undefined> = {}): any {
 function makeReply(): any {
   const reply: any = {};
   reply.status = jest.fn().mockReturnValue(reply);
+  reply.header = jest.fn().mockReturnValue(reply);
   reply.send = jest.fn().mockReturnValue(reply);
   return reply;
 }
@@ -40,10 +41,11 @@ describe('userAuthMiddleware', () => {
     await userAuthMiddleware(request, reply);
 
     expect(reply.status).toHaveBeenCalledWith(401);
+    expect(reply.header).toHaveBeenCalledWith('WWW-Authenticate', 'Bearer realm="agentpay"');
     expect(reply.send).toHaveBeenCalledWith(
       expect.objectContaining({ error: expect.stringContaining('Unauthorized') }),
     );
-    expect(mockFindMany).not.toHaveBeenCalled();
+    expect(mockFindUnique).not.toHaveBeenCalled();
   });
 
   it('returns 401 when header is present but not "Bearer <key>" format', async () => {
@@ -53,48 +55,53 @@ describe('userAuthMiddleware', () => {
     await userAuthMiddleware(request, reply);
 
     expect(reply.status).toHaveBeenCalledWith(401);
+    expect(reply.header).toHaveBeenCalledWith('WWW-Authenticate', 'Bearer realm="agentpay"');
     expect(reply.send).toHaveBeenCalledWith(
       expect.objectContaining({ error: expect.stringContaining('Unauthorized') }),
     );
-    expect(mockFindMany).not.toHaveBeenCalled();
+    expect(mockFindUnique).not.toHaveBeenCalled();
   });
 
-  it('returns 401 when key does not match any stored hash (wrong key)', async () => {
-    const hash = bcrypt.hashSync('correct-key', 10);
-    mockFindMany.mockResolvedValue([
-      { id: 'user-1', email: 'a@b.com', apiKeyHash: hash },
-    ]);
+  it('returns 401 when no user found for the key prefix', async () => {
+    mockFindUnique.mockResolvedValue(null);
 
-    const request = makeRequest({ authorization: 'Bearer wrong-key' });
+    const request = makeRequest({ authorization: 'Bearer some-key-that-is-long-enough' });
     const reply = makeReply();
 
     await userAuthMiddleware(request, reply);
 
     expect(reply.status).toHaveBeenCalledWith(401);
+    expect(reply.header).toHaveBeenCalledWith('WWW-Authenticate', 'Bearer realm="agentpay"');
     expect(reply.send).toHaveBeenCalledWith(
       expect.objectContaining({ error: expect.stringContaining('invalid API key') }),
     );
   });
 
-  it('returns 401 when no users have apiKeyHash set', async () => {
-    mockFindMany.mockResolvedValue([]);
+  it('returns 401 when prefix matches but bcrypt.compare fails (wrong key)', async () => {
+    const correctKey = 'correct-key-that-is-long-enough-for-prefix';
+    const hash = bcrypt.hashSync(correctKey, 10);
+    const wrongKey = correctKey.slice(0, 16) + 'different-suffix';
+    mockFindUnique.mockResolvedValue({
+      id: 'user-1', email: 'a@b.com', apiKeyHash: hash, apiKeyPrefix: correctKey.slice(0, 16),
+    });
 
-    const request = makeRequest({ authorization: 'Bearer some-key' });
+    const request = makeRequest({ authorization: `Bearer ${wrongKey}` });
     const reply = makeReply();
 
     await userAuthMiddleware(request, reply);
 
     expect(reply.status).toHaveBeenCalledWith(401);
+    expect(reply.header).toHaveBeenCalledWith('WWW-Authenticate', 'Bearer realm="agentpay"');
     expect(reply.send).toHaveBeenCalledWith(
       expect.objectContaining({ error: expect.stringContaining('invalid API key') }),
     );
   });
 
   it('attaches user to request when valid key is provided', async () => {
-    const rawKey = 'my-secret-api-key';
+    const rawKey = crypto.randomBytes(32).toString('hex');
     const hash = bcrypt.hashSync(rawKey, 10);
-    const user = { id: 'user-42', email: 'alice@agentpay.dev', apiKeyHash: hash };
-    mockFindMany.mockResolvedValue([user]);
+    const user = { id: 'user-42', email: 'alice@agentpay.dev', apiKeyHash: hash, apiKeyPrefix: rawKey.slice(0, 16) };
+    mockFindUnique.mockResolvedValue(user);
 
     const request = makeRequest({ authorization: `Bearer ${rawKey}` });
     const reply = makeReply();
@@ -109,42 +116,19 @@ describe('userAuthMiddleware', () => {
     expect(request.user).toEqual(user);
   });
 
-  it('returns 401 if bcrypt.compare never returns true (all users checked)', async () => {
-    const hash1 = bcrypt.hashSync('key-for-user-1', 10);
-    const hash2 = bcrypt.hashSync('key-for-user-2', 10);
-    mockFindMany.mockResolvedValue([
-      { id: 'user-1', email: 'a@b.com', apiKeyHash: hash1 },
-      { id: 'user-2', email: 'c@d.com', apiKeyHash: hash2 },
-    ]);
+  it('looks up user by apiKeyPrefix via findUnique', async () => {
+    const rawKey = crypto.randomBytes(32).toString('hex');
+    const hash = bcrypt.hashSync(rawKey, 10);
+    const user = { id: 'user-1', email: 'a@b.com', apiKeyHash: hash, apiKeyPrefix: rawKey.slice(0, 16) };
+    mockFindUnique.mockResolvedValue(user);
 
-    const request = makeRequest({ authorization: 'Bearer totally-different-key' });
+    const request = makeRequest({ authorization: `Bearer ${rawKey}` });
     const reply = makeReply();
 
     await userAuthMiddleware(request, reply);
 
-    expect(reply.status).toHaveBeenCalledWith(401);
-    expect(reply.send).toHaveBeenCalledWith(
-      expect.objectContaining({ error: expect.stringContaining('invalid API key') }),
-    );
-    // Verify the middleware actually checked all users
-    expect(request.user).toBeUndefined();
-  });
-
-  it('matches the correct user among multiple users', async () => {
-    const rawKey2 = 'key-for-second-user';
-    const hash1 = bcrypt.hashSync('key-for-first-user', 10);
-    const hash2 = bcrypt.hashSync(rawKey2, 10);
-    const user1 = { id: 'user-1', email: 'a@b.com', apiKeyHash: hash1 };
-    const user2 = { id: 'user-2', email: 'c@d.com', apiKeyHash: hash2 };
-    mockFindMany.mockResolvedValue([user1, user2]);
-
-    const request = makeRequest({ authorization: `Bearer ${rawKey2}` });
-    const reply = makeReply();
-
-    await userAuthMiddleware(request, reply);
-
-    expect(reply.status).not.toHaveBeenCalled();
-    expect(request.user).toEqual(user2);
+    expect(mockFindUnique).toHaveBeenCalledWith({ where: { apiKeyPrefix: rawKey.slice(0, 16) } });
+    expect(request.user).toEqual(user);
   });
 });
 
