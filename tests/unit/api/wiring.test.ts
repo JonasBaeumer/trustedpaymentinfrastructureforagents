@@ -102,13 +102,14 @@ jest.mock('@/telegram/notificationService', () => ({
 // DB — user-1 has a pre-hashed API key so userAuthMiddleware can authenticate requests
 import bcrypt from 'bcryptjs';
 const TEST_RAW_KEY = 'test-api-key-for-wiring-tests';
-const TEST_KEY_HASH = bcrypt.hashSync(TEST_RAW_KEY, 10);
+const TEST_KEY_PREFIX = TEST_RAW_KEY.slice(0, 16);
+let TEST_KEY_HASH: string;
 
 const dbUsers: Record<string, any> = {
   'user-1': {
     id: 'user-1', email: 'test@agentpay.dev', mainBalance: 100000,
     maxBudgetPerIntent: 50000, merchantAllowlist: [], mccAllowlist: [],
-    apiKeyHash: TEST_KEY_HASH,
+    apiKeyHash: null, apiKeyPrefix: TEST_KEY_PREFIX,
   },
 };
 const dbIntents: Record<string, any> = {};
@@ -119,11 +120,13 @@ const dbPairingCodes: Record<string, any> = {}; // keyed by agentId
 jest.mock('@/db/client', () => ({
   prisma: {
     user: {
-      findUnique: jest.fn(({ where }: any) => Promise.resolve(dbUsers[where.id] ?? null)),
-      findMany: jest.fn(({ where }: any) => {
-        // userAuthMiddleware queries users with apiKeyHash != null
-        const users = Object.values(dbUsers).filter((u: any) => u.apiKeyHash != null);
-        return Promise.resolve(users);
+      findUnique: jest.fn(({ where }: any) => {
+        if (where.id) return Promise.resolve(dbUsers[where.id] ?? null);
+        if (where.apiKeyPrefix) {
+          const found = Object.values(dbUsers).find((u: any) => u.apiKeyPrefix === where.apiKeyPrefix);
+          return Promise.resolve(found ?? null);
+        }
+        return Promise.resolve(null);
       }),
     },
     purchaseIntent: {
@@ -184,6 +187,8 @@ const AUTH_HEADER = `Bearer ${TEST_RAW_KEY}`;
 let app: FastifyInstance;
 
 beforeAll(async () => {
+  TEST_KEY_HASH = await bcrypt.hash(TEST_RAW_KEY, 10);
+  dbUsers['user-1'].apiKeyHash = TEST_KEY_HASH;
   app = buildApp();
   await app.ready();
 });

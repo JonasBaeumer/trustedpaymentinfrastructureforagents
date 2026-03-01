@@ -50,6 +50,7 @@ model User {
   phoneNumber         String?
   agentId             String?         @unique
   apiKeyHash          String?
+  apiKeyPrefix        String?         @unique
   createdAt           DateTime        @default(now())
 
   intents             PurchaseIntent[]

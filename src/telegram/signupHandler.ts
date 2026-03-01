@@ -82,6 +82,7 @@ export async function handleTelegramMessage(update: Update): Promise<void> {
         mainBalance: 1_000_000, // 10 000 EUR in cents
         maxBudgetPerIntent: 50000,
         apiKeyHash,
+        apiKeyPrefix: rawKey.slice(0, 16),
       },
     });
 

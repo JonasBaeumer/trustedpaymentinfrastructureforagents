@@ -22,6 +22,7 @@ const USER_A = {
   merchantAllowlist: [],
   mccAllowlist: [],
   apiKeyHash: '', // set in beforeAll
+  apiKeyPrefix: RAW_KEY_USER_A.slice(0, 16),
   createdAt: new Date(),
 };
 
@@ -33,6 +34,7 @@ const USER_B = {
   merchantAllowlist: [],
   mccAllowlist: [],
   apiKeyHash: '', // set in beforeAll
+  apiKeyPrefix: RAW_KEY_USER_B.slice(0, 16),
   createdAt: new Date(),
 };
 
@@ -116,13 +118,13 @@ jest.mock('@/db/client', () => ({
       findMany: jest.fn().mockResolvedValue([]),
     },
     user: {
-      findUnique: jest.fn(({ where }: any) => Promise.resolve(store.users[where.id] ?? null)),
-      findMany: jest.fn(({ where }: any) => {
-        const all = Object.values(store.users);
-        if (where?.apiKeyHash?.not === null) {
-          return Promise.resolve(all.filter((u: any) => u.apiKeyHash != null));
+      findUnique: jest.fn(({ where }: any) => {
+        if (where.id) return Promise.resolve(store.users[where.id] ?? null);
+        if (where.apiKeyPrefix) {
+          const found = Object.values(store.users).find((u: any) => u.apiKeyPrefix === where.apiKeyPrefix);
+          return Promise.resolve(found ?? null);
         }
-        return Promise.resolve(all);
+        return Promise.resolve(null);
       }),
       update: jest.fn(({ where, data }: any) => {
         store.users[where.id] = { ...store.users[where.id], ...data };
