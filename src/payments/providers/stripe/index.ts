@@ -1,9 +1,6 @@
-// TODO: move cardService.ts and webhookHandler.ts into this directory (providers/stripe/)
-// so all Stripe implementation lives here. Currently they remain at src/payments/ root
-// for a safe incremental migration — this shim keeps callers decoupled in the meantime.
 import { IPaymentProvider, VirtualCardData, CardReveal } from '@/contracts';
-import { issueVirtualCard, revealCard, freezeCard, cancelCard } from '@/payments/cardService';
-import { handleStripeEvent } from '@/payments/webhookHandler';
+import { issueVirtualCard, revealCard, freezeCard, cancelCard } from './cardService';
+import { handleStripeEvent } from './webhookHandler';
 
 export class StripePaymentProvider implements IPaymentProvider {
   async issueCard(

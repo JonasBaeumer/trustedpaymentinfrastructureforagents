@@ -9,7 +9,7 @@ const mockStripe = {
     constructEvent: jest.fn(),
   },
 };
-jest.mock('@/payments/stripeClient', () => ({ getStripeClient: () => mockStripe }));
+jest.mock('@/payments/providers/stripe/stripeClient', () => ({ getStripeClient: () => mockStripe }));
 
 // Mock prisma
 jest.mock('@/db/client', () => ({
@@ -21,7 +21,7 @@ jest.mock('@/db/client', () => ({
   },
 }));
 
-import { issueVirtualCard, revealCard, freezeCard, cancelCard } from '@/payments/cardService';
+import { issueVirtualCard, revealCard, freezeCard, cancelCard } from '@/payments/providers/stripe/cardService';
 import { prisma } from '@/db/client';
 import { CardAlreadyRevealedError, IntentNotFoundError } from '@/contracts';
 
@@ -283,7 +283,7 @@ describe('webhookHandler', () => {
       throw new Error('Invalid signature');
     });
 
-    const { handleStripeEvent } = require('@/payments/webhookHandler');
+    const { handleStripeEvent } = require('@/payments/providers/stripe/webhookHandler');
     await expect(handleStripeEvent(Buffer.from('{}'), 'bad-sig')).rejects.toThrow('Webhook signature verification failed');
   });
 });

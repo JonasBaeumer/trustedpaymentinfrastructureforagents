@@ -94,7 +94,7 @@ jest.mock('@/payments', () => ({
 }));
 
 // Stripe (needed by webhooks route import chain)
-jest.mock('@/payments/stripeClient', () => ({
+jest.mock('@/payments/providers/stripe/stripeClient', () => ({
   getStripeClient: () => ({ webhooks: { constructEvent: jest.fn() } }),
 }));
 

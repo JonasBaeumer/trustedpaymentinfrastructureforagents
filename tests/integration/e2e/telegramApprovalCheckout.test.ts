@@ -30,14 +30,14 @@ import { prisma } from '@/db/client';
 import { getRedisClient } from '@/config/redis';
 import { requestApproval, recordDecision } from '@/approval/approvalService';
 import { sendApprovalRequest } from '@/telegram/notificationService';
-import { issueVirtualCard } from '@/payments/cardService';
+import { issueVirtualCard } from '@/payments/providers/stripe/cardService';
 import { reserveForIntent, settleIntent } from '@/ledger/potService';
 import {
   markCardIssued,
   startCheckout,
   completeCheckout,
 } from '@/orchestrator/intentService';
-import { getStripeClient } from '@/payments/stripeClient';
+import { getStripeClient } from '@/payments/providers/stripe/stripeClient';
 import { IntentStatus, ApprovalDecisionType } from '@/contracts';
 import { getTelegramMockCalls, clearTelegramMockCalls } from '@/telegram/mockBot';
 

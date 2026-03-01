@@ -11,7 +11,7 @@ const mockStripe = {
     },
   },
 };
-jest.mock('@/payments/stripeClient', () => ({ getStripeClient: () => mockStripe }));
+jest.mock('@/payments/providers/stripe/stripeClient', () => ({ getStripeClient: () => mockStripe }));
 
 // Mock Prisma
 const mockFindUniqueCard = jest.fn();

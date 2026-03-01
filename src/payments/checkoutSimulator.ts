@@ -1,5 +1,5 @@
 import Stripe from 'stripe';
-import { getStripeClient } from './stripeClient';
+import { getStripeClient } from './providers/stripe/stripeClient';
 import { prisma } from '@/db/client';
 import { IntentNotFoundError } from '@/contracts';
 
