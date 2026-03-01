@@ -10,6 +10,18 @@ import { enqueueSearch } from '@/queue/producers';
 export async function intentRoutes(fastify: FastifyInstance): Promise<void> {
   // POST /v1/intents
   fastify.post('/v1/intents', {
+    config: {
+      rateLimit: {
+        max: 10,
+        timeWindow: '1 minute',
+        keyGenerator: (req: FastifyRequest) => {
+          const auth = req.headers.authorization ?? '';
+          // Use the non-secret 16-char prefix (same value as apiKeyPrefix in DB)
+          const keyPart = auth.startsWith('Bearer ') ? auth.slice(7, 23) : 'anon';
+          return `${keyPart}:${req.ip ?? 'unknown'}`;
+        },
+      },
+    },
     preHandler: [userAuthMiddleware, idempotencyMiddleware],
   }, async (request: FastifyRequest, reply: FastifyReply) => {
     const idempotencyKey = request.headers['x-idempotency-key'] as string;

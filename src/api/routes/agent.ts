@@ -135,6 +135,17 @@ export async function agentRoutes(fastify: FastifyInstance): Promise<void> {
   // GET /v1/agent/card/:intentId — one-time card reveal via Stripe
   // cardService enforces the single-reveal rule and fetches PAN/CVC from Stripe
   fastify.get('/v1/agent/card/:intentId', {
+    config: {
+      rateLimit: {
+        max: 2,
+        timeWindow: '1 minute',
+        keyGenerator: (req: FastifyRequest) => {
+          const workerKey = req.headers['x-worker-key'] ?? '';
+          const intentId = (req.params as { intentId: string }).intentId ?? '';
+          return `${workerKey}:${intentId}`;
+        },
+      },
+    },
     preHandler: workerAuthMiddleware,
   }, async (request: FastifyRequest<{ Params: { intentId: string } }>, reply: FastifyReply) => {
     const { intentId } = request.params;
@@ -157,6 +168,13 @@ export async function agentRoutes(fastify: FastifyInstance): Promise<void> {
   // Body: { agentId?: string }  — omit on first call; pass existing agentId to renew code
   // Returns: { agentId, pairingCode, expiresAt }
   fastify.post('/v1/agent/register', {
+    config: {
+      rateLimit: {
+        max: 3,
+        timeWindow: '10 minutes',
+        keyGenerator: (req: FastifyRequest) => req.ip ?? 'unknown',
+      },
+    },
     preHandler: workerAuthMiddleware,
   }, async (request: FastifyRequest, reply: FastifyReply) => {
     const parsed = agentRegisterSchema.safeParse(request.body);

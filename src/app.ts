@@ -1,4 +1,5 @@
 import Fastify from 'fastify';
+import rateLimit from '@fastify/rate-limit';
 import { intentRoutes } from '@/api/routes/intents';
 import { approvalRoutes } from '@/api/routes/approvals';
 import { agentRoutes } from '@/api/routes/agent';
@@ -13,6 +14,10 @@ export function buildApp() {
     logger: {
       level: process.env.LOG_LEVEL || 'info',
     },
+    // trustProxy unwraps x-forwarded-for set by a trusted upstream proxy so req.ip
+    // returns the real client IP. Without this, reading x-forwarded-for directly is
+    // client-spoofable and rate-limit keys can be bypassed.
+    trustProxy: true,
   });
 
   // Register content-type parser: for Stripe webhook path pass raw buffer (required for
@@ -34,17 +39,50 @@ export function buildApp() {
     }
   );
 
-  // Register routes
-  fastify.register(intentRoutes);
-  fastify.register(approvalRoutes);
-  fastify.register(agentRoutes);
-  fastify.register(webhookRoutes);
-  fastify.register(debugRoutes);
-  fastify.register(telegramRoutes);
-  fastify.register(checkoutRoutes);
-  fastify.register(usersRoutes);
+  // Global rate limit — 60 req/min per IP, Redis-backed in production
+  if (process.env.NODE_ENV !== 'test') {
+    const { getRedisClient } = require('@/config/redis');
+    fastify.register(rateLimit, {
+      global: true,
+      max: 60,
+      timeWindow: '1 minute',
+      redis: getRedisClient(),
+      keyGenerator: (req) => req.ip ?? 'unknown',
+      errorResponseBuilder: (_req, context) => ({
+        statusCode: 429,
+        error: 'rate_limit_exceeded',
+        message: `Too many requests. Please retry after ${context.after}.`,
+        retryAfter: context.ttl / 1000,
+      }),
+      addHeadersOnExceeding: {
+        'x-ratelimit-limit': true,
+        'x-ratelimit-remaining': true,
+        'x-ratelimit-reset': true,
+      },
+      addHeaders: {
+        'x-ratelimit-limit': true,
+        'x-ratelimit-remaining': true,
+        'x-ratelimit-reset': true,
+        'retry-after': true,
+      },
+    });
+  }
 
-  fastify.get('/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }));
+  // Use after() to ensure the rate-limit plugin is loaded before routes are registered,
+  // so the global onRoute hook applies to all routes including /health.
+  fastify.after(() => {
+    // Register routes
+    fastify.register(intentRoutes);
+    fastify.register(approvalRoutes);
+    fastify.register(agentRoutes);
+    fastify.register(webhookRoutes);
+    fastify.register(debugRoutes);
+    fastify.register(telegramRoutes);
+    fastify.register(checkoutRoutes);
+    fastify.register(usersRoutes);
+
+    fastify.get('/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }));
+  });
 
   return fastify;
 }
