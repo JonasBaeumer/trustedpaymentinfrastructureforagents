@@ -19,4 +19,5 @@ export const env = {
   TELEGRAM_WEBHOOK_SECRET: process.env.TELEGRAM_WEBHOOK_SECRET || '',
   TELEGRAM_TEST_CHAT_ID: process.env.TELEGRAM_TEST_CHAT_ID || '',
   TELEGRAM_MOCK: process.env.TELEGRAM_MOCK === 'true',
+  PAYMENT_PROVIDER: process.env.PAYMENT_PROVIDER || 'stripe',
 };

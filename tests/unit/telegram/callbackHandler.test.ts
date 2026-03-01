@@ -38,9 +38,20 @@ jest.mock('@/ledger/potService', () => ({
   returnIntent: mockReturnIntent,
 }));
 
-const mockIssueVirtualCard = jest.fn().mockResolvedValue({ stripeCardId: 'ic_test', last4: '4242' });
-jest.mock('@/payments/cardService', () => ({
-  issueVirtualCard: mockIssueVirtualCard,
+const mockIssueCard = jest.fn().mockResolvedValue({ stripeCardId: 'ic_test', last4: '4242' });
+const mockRevealCard = jest.fn().mockResolvedValue({ number: '4242424242424242', cvc: '123', expMonth: 12, expYear: 2030, last4: '4242' });
+const mockFreezeCard = jest.fn().mockResolvedValue(undefined);
+const mockCancelCard = jest.fn().mockResolvedValue(undefined);
+const mockHandleWebhookEvent = jest.fn().mockResolvedValue(undefined);
+const mockProvider = {
+  issueCard: mockIssueCard,
+  revealCard: mockRevealCard,
+  freezeCard: mockFreezeCard,
+  cancelCard: mockCancelCard,
+  handleWebhookEvent: mockHandleWebhookEvent,
+};
+jest.mock('@/payments', () => ({
+  getPaymentProvider: () => mockProvider,
 }));
 
 const mockMarkCardIssued = jest.fn().mockResolvedValue({});
@@ -83,7 +94,7 @@ beforeEach(() => {
 
   mockAnswerCallbackQuery.mockResolvedValue(undefined);
   mockEditMessageText.mockResolvedValue(undefined);
-  mockIssueVirtualCard.mockResolvedValue({ stripeCardId: 'ic_test', last4: '4242' });
+  mockIssueCard.mockResolvedValue({ stripeCardId: 'ic_test', last4: '4242' });
 });
 
 function makeUpdate(action: string, intentId: string, cbId = 'cb-1', fromId = 111): any {
@@ -129,7 +140,7 @@ describe('handleTelegramCallback — approve path', () => {
     const order: string[] = [];
     mockRecordDecision.mockImplementation(() => { order.push('recordDecision'); return Promise.resolve({}); });
     mockReserveForIntent.mockImplementation(() => { order.push('reserveForIntent'); return Promise.resolve({}); });
-    mockIssueVirtualCard.mockImplementation(() => { order.push('issueVirtualCard'); return Promise.resolve({ stripeCardId: 'ic_t', last4: '4242' }); });
+    mockIssueCard.mockImplementation(() => { order.push('issueCard'); return Promise.resolve({ stripeCardId: 'ic_t', last4: '4242' }); });
     mockMarkCardIssued.mockImplementation(() => { order.push('markCardIssued'); return Promise.resolve({}); });
     mockStartCheckout.mockImplementation(() => { order.push('startCheckout'); return Promise.resolve({}); });
     mockEnqueueCheckout.mockImplementation(() => { order.push('enqueueCheckout'); return Promise.resolve(); });
@@ -139,7 +150,7 @@ describe('handleTelegramCallback — approve path', () => {
     expect(order).toEqual([
       'recordDecision',
       'reserveForIntent',
-      'issueVirtualCard',
+      'issueCard',
       'markCardIssued',
       'startCheckout',
       'enqueueCheckout',
@@ -163,7 +174,7 @@ describe('handleTelegramCallback — reject path', () => {
 
     expect(mockRecordDecision).toHaveBeenCalledWith('intent-rej1', ApprovalDecisionType.DENIED, expect.any(String), 'Rejected via Telegram');
     expect(mockReserveForIntent).not.toHaveBeenCalled();
-    expect(mockIssueVirtualCard).not.toHaveBeenCalled();
+    expect(mockIssueCard).not.toHaveBeenCalled();
     expect(mockEnqueueCheckout).not.toHaveBeenCalled();
   });
 
@@ -213,7 +224,7 @@ describe('handleTelegramCallback — idempotency guard', () => {
 describe('handleTelegramCallback — issueVirtualCard failure compensation', () => {
   it('calls returnIntent when issueVirtualCard throws', async () => {
     seedAwaitingIntent('intent-fail');
-    mockIssueVirtualCard.mockRejectedValueOnce(new Error('Stripe down'));
+    mockIssueCard.mockRejectedValueOnce(new Error('Stripe down'));
 
     await expect(handleTelegramCallback(makeUpdate('approve', 'intent-fail', 'cb-fail'))).rejects.toThrow('Stripe down');
 
@@ -222,7 +233,7 @@ describe('handleTelegramCallback — issueVirtualCard failure compensation', () 
 
   it('edits message with error text when issueVirtualCard throws', async () => {
     seedAwaitingIntent('intent-fail2');
-    mockIssueVirtualCard.mockRejectedValueOnce(new Error('Stripe down'));
+    mockIssueCard.mockRejectedValueOnce(new Error('Stripe down'));
 
     await expect(handleTelegramCallback(makeUpdate('approve', 'intent-fail2', 'cb-fail2'))).rejects.toThrow();
 
@@ -235,12 +246,12 @@ describe('handleTelegramCallback — issueVirtualCard failure compensation', () 
 
   it('saves idempotency record before processing so retries are blocked', async () => {
     seedAwaitingIntent('intent-idem2');
-    mockIssueVirtualCard.mockRejectedValueOnce(new Error('Stripe down'));
+    mockIssueCard.mockRejectedValueOnce(new Error('Stripe down'));
 
     await expect(handleTelegramCallback(makeUpdate('approve', 'intent-idem2', 'cb-idem2'))).rejects.toThrow();
 
     // Re-run with same callbackQueryId — idempotency guard should block it
-    mockIssueVirtualCard.mockResolvedValue({ stripeCardId: 'ic_t', last4: '4242' });
+    mockIssueCard.mockResolvedValue({ stripeCardId: 'ic_t', last4: '4242' });
     jest.clearAllMocks();
     // Restore the idempotency entry (upsert mock already saved it via the real dbIdempotency object)
     await handleTelegramCallback(makeUpdate('approve', 'intent-idem2', 'cb-idem2'));

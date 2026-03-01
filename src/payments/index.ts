@@ -1,4 +1,2 @@
-export { getStripeClient } from './stripeClient';
-export { buildSpendingControls } from './spendingControls';
-export { issueVirtualCard, revealCard, freezeCard, cancelCard } from './cardService';
-export { handleStripeEvent } from './webhookHandler';
+// Production API — callers should use the provider factory
+export { getPaymentProvider } from './providerFactory';

@@ -74,7 +74,7 @@ jest.mock('@/ledger/potService', () => ({
   returnIntent: mockReturnIntent,
 }));
 
-// payments
+// payments — mock the provider factory so callers get our spies
 const mockIssueVirtualCard = jest.fn().mockResolvedValue({
   id: 'vc-1', intentId: 'intent-1', stripeCardId: 'ic_test', last4: '4242',
 });
@@ -82,10 +82,15 @@ const mockRevealCard = jest.fn().mockResolvedValue({
   number: '4242424242424242', cvc: '123', expMonth: 12, expYear: 2027, last4: '4242',
 });
 const mockCancelCard = jest.fn().mockResolvedValue(undefined);
-jest.mock('@/payments/cardService', () => ({
-  issueVirtualCard: mockIssueVirtualCard,
+const mockPaymentProvider = {
+  issueCard: mockIssueVirtualCard,
   revealCard: mockRevealCard,
+  freezeCard: jest.fn().mockResolvedValue(undefined),
   cancelCard: mockCancelCard,
+  handleWebhookEvent: jest.fn().mockResolvedValue(undefined),
+};
+jest.mock('@/payments', () => ({
+  getPaymentProvider: () => mockPaymentProvider,
 }));
 
 // Stripe (needed by webhooks route import chain)

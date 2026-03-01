@@ -5,7 +5,7 @@ import { agentQuoteSchema, agentResultSchema, agentRegisterSchema } from '@/api/
 import { IntentStatus } from '@/contracts';
 import { receiveQuote, requestApproval, completeCheckout, failCheckout } from '@/orchestrator/intentService';
 import { settleIntent, returnIntent } from '@/ledger/potService';
-import { revealCard, cancelCard } from '@/payments/cardService';
+import { getPaymentProvider } from '@/payments';
 import { prisma } from '@/db/client';
 import { sendApprovalRequest } from '@/telegram/notificationService';
 
@@ -77,7 +77,7 @@ export async function agentRoutes(fastify: FastifyInstance): Promise<void> {
     }
 
     // Cancel the virtual card — one purchase, one card (best-effort)
-    await cancelCard(intentId).catch(() => {});
+    await getPaymentProvider().cancelCard(intentId).catch(() => {});
 
     // Store receipt/error info in metadata
     await prisma.purchaseIntent.update({
@@ -140,7 +140,7 @@ export async function agentRoutes(fastify: FastifyInstance): Promise<void> {
     const { intentId } = request.params;
 
     try {
-      const reveal = await revealCard(intentId);
+      const reveal = await getPaymentProvider().revealCard(intentId);
       return reply.send({ intentId, ...reveal });
     } catch (err: any) {
       if (err.name === 'CardAlreadyRevealedError') {

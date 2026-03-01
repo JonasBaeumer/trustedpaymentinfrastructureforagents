@@ -10,11 +10,12 @@ export interface IOrchestrator {
   getIntentWithHistory(intentId: string): Promise<{ intent: PurchaseIntentData; auditEvents: AuditEventData[] }>;
 }
 
-export interface ICardService {
-  issueVirtualCard(intentId: string, amount: number, currency: string, options?: { mccAllowlist?: string[] }): Promise<VirtualCardData>;
+export interface IPaymentProvider {
+  issueCard(intentId: string, amount: number, currency: string, options?: { mccAllowlist?: string[] }): Promise<VirtualCardData>;
   revealCard(intentId: string): Promise<CardReveal>;
   freezeCard(intentId: string): Promise<void>;
   cancelCard(intentId: string): Promise<void>;
+  handleWebhookEvent(rawBody: Buffer | string, signature: string): Promise<void>;
 }
 
 export interface IApprovalService {
