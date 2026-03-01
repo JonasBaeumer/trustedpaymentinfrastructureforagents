@@ -14,6 +14,10 @@ export function buildApp() {
     logger: {
       level: process.env.LOG_LEVEL || 'info',
     },
+    // trustProxy unwraps x-forwarded-for set by a trusted upstream proxy so req.ip
+    // returns the real client IP. Without this, reading x-forwarded-for directly is
+    // client-spoofable and rate-limit keys can be bypassed.
+    trustProxy: true,
   });
 
   // Register content-type parser: for Stripe webhook path pass raw buffer (required for
@@ -43,9 +47,7 @@ export function buildApp() {
       max: 60,
       timeWindow: '1 minute',
       redis: getRedisClient(),
-      keyGenerator: (req) => {
-        return (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() ?? req.ip ?? 'unknown';
-      },
+      keyGenerator: (req) => req.ip ?? 'unknown',
       errorResponseBuilder: (_req, context) => ({
         statusCode: 429,
         error: 'rate_limit_exceeded',

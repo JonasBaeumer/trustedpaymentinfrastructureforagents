@@ -12,9 +12,7 @@ export async function telegramRoutes(fastify: FastifyInstance): Promise<void> {
       rateLimit: {
         max: 200,
         timeWindow: '1 minute',
-        keyGenerator: (req: FastifyRequest) => {
-          return (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() ?? req.ip ?? 'unknown';
-        },
+        keyGenerator: (req: FastifyRequest) => req.ip ?? 'unknown',
       },
     },
   }, async (request: FastifyRequest, reply: FastifyReply) => {

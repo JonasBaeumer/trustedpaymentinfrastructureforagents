@@ -18,8 +18,9 @@ export async function approvalRoutes(fastify: FastifyInstance): Promise<void> {
         timeWindow: '1 minute',
         keyGenerator: (req: FastifyRequest) => {
           const auth = req.headers.authorization ?? '';
-          const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() ?? req.ip ?? 'unknown';
-          return `${auth}:${ip}`;
+          // Use the non-secret 16-char prefix (same value as apiKeyPrefix in DB)
+          const keyPart = auth.startsWith('Bearer ') ? auth.slice(7, 23) : 'anon';
+          return `${keyPart}:${req.ip ?? 'unknown'}`;
         },
       },
     },

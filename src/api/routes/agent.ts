@@ -172,9 +172,7 @@ export async function agentRoutes(fastify: FastifyInstance): Promise<void> {
       rateLimit: {
         max: 3,
         timeWindow: '10 minutes',
-        keyGenerator: (req: FastifyRequest) => {
-          return (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() ?? req.ip ?? 'unknown';
-        },
+        keyGenerator: (req: FastifyRequest) => req.ip ?? 'unknown',
       },
     },
     preHandler: workerAuthMiddleware,
