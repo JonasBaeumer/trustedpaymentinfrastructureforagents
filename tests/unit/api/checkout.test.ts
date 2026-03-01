@@ -16,8 +16,8 @@ jest.mock('@/orchestrator/intentService', () => ({}));
 jest.mock('@/queue/producers', () => ({}));
 jest.mock('@/approval/approvalService', () => ({}));
 jest.mock('@/ledger/potService', () => ({}));
-jest.mock('@/payments/cardService', () => ({}));
-jest.mock('@/payments/stripeClient', () => ({
+jest.mock('@/payments/providers/stripe/cardService', () => ({}));
+jest.mock('@/payments/providers/stripe/stripeClient', () => ({
   getStripeClient: () => ({ webhooks: { constructEvent: jest.fn() } }),
 }));
 jest.mock('@/telegram/notificationService', () => ({}));
@@ -25,7 +25,7 @@ jest.mock('@/db/client', () => ({ prisma: {} }));
 
 // ─── Mock runSimulatedCheckout ────────────────────────────────────────────────
 const mockRunSimulatedCheckout = jest.fn();
-jest.mock('@/payments/checkoutSimulator', () => ({
+jest.mock('@/payments/providers/stripe/checkoutSimulator', () => ({
   runSimulatedCheckout: mockRunSimulatedCheckout,
 }));
 

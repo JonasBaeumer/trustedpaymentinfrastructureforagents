@@ -11,7 +11,7 @@ const mockStripe = {
     },
   },
 };
-jest.mock('@/payments/stripeClient', () => ({ getStripeClient: () => mockStripe }));
+jest.mock('@/payments/providers/stripe/stripeClient', () => ({ getStripeClient: () => mockStripe }));
 
 // Mock Prisma
 const mockFindUniqueCard = jest.fn();
@@ -23,7 +23,7 @@ jest.mock('@/db/client', () => ({
   },
 }));
 
-import { runSimulatedCheckout } from '@/payments/checkoutSimulator';
+import { runSimulatedCheckout } from '@/payments/providers/stripe/checkoutSimulator';
 import { IntentNotFoundError } from '@/contracts';
 
 const CARD_ID = 'ic_test123';

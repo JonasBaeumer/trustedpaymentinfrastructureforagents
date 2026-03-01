@@ -19,7 +19,7 @@ jest.mock('@/telegram/callbackHandler', () => ({
 }));
 
 // Stripe client mock (needed by webhooks route)
-jest.mock('@/payments/stripeClient', () => ({
+jest.mock('@/payments/providers/stripe/stripeClient', () => ({
   getStripeClient: () => ({ webhooks: { constructEvent: jest.fn() } }),
 }));
 
@@ -43,7 +43,7 @@ jest.mock('@/ledger/potService', () => ({
   settleIntent: jest.fn(),
   returnIntent: jest.fn(),
 }));
-jest.mock('@/payments/cardService', () => ({
+jest.mock('@/payments/providers/stripe/cardService', () => ({
   issueVirtualCard: jest.fn(),
   revealCard: jest.fn(),
   cancelCard: jest.fn(),

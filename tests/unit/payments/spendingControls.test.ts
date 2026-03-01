@@ -1,4 +1,4 @@
-import { buildSpendingControls } from '@/payments/spendingControls';
+import { buildSpendingControls } from '@/payments/providers/stripe/spendingControls';
 
 describe('buildSpendingControls', () => {
   it('creates per-authorization limit', () => {

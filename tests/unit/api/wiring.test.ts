@@ -14,7 +14,7 @@
 const mockRunSimulatedCheckout = jest.fn().mockResolvedValue({
   success: true, chargeId: 'pi_wiring_test', amount: 5000, currency: 'eur',
 });
-jest.mock('@/payments/checkoutSimulator', () => ({
+jest.mock('@/payments/providers/stripe/checkoutSimulator', () => ({
   runSimulatedCheckout: mockRunSimulatedCheckout,
 }));
 
@@ -94,7 +94,7 @@ jest.mock('@/payments', () => ({
 }));
 
 // Stripe (needed by webhooks route import chain)
-jest.mock('@/payments/stripeClient', () => ({
+jest.mock('@/payments/providers/stripe/stripeClient', () => ({
   getStripeClient: () => ({ webhooks: { constructEvent: jest.fn() } }),
 }));
 

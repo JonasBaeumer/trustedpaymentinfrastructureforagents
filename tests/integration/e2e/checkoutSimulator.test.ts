@@ -29,9 +29,9 @@
 
 import { prisma } from '@/db/client';
 import { getRedisClient } from '@/config/redis';
-import { issueVirtualCard, revealCard } from '@/payments/cardService';
-import { runSimulatedCheckout } from '@/payments/checkoutSimulator';
-import { getStripeClient } from '@/payments/stripeClient';
+import { issueVirtualCard, revealCard } from '@/payments/providers/stripe/cardService';
+import { runSimulatedCheckout } from '@/payments/providers/stripe/checkoutSimulator';
+import { getStripeClient } from '@/payments/providers/stripe/stripeClient';
 import { IntentStatus } from '@/contracts';
 
 // Don't send real Telegram messages during tests
